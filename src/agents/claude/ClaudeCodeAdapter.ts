@@ -16,9 +16,8 @@ export class ClaudeCodeAdapter extends Agent {
     await fs.writeFile(instructionFile, prompt);
 
     try {
-      // 2. Execute Claude CLI (Headless)
-      // Note: In a real environment, verify 'claude-code' is in PATH
-      // For prototype: we simulate the call if the binary is missing, or try to run it.
+      // Log the prompt for debugging
+      console.log(`[Claude] Full Prompt:\n${prompt}`);
       
       console.log(`[Claude] Executing headless mode for subtask ${request.subtaskId}...`);
       
@@ -79,6 +78,8 @@ Format as Markdown with Frontmatter.
   }
 
   private async mockExecution(request: AgentExecutionRequest): Promise<void> {
+    await this.applySimpleActions(request);
+
     const mockContent = `---
 agent: claude-code
 subtask_id: ${request.subtaskId}
@@ -94,5 +95,22 @@ Task: ${request.taskDescription}
     await fs.ensureDir(path.dirname(request.outputFile));
     await fs.writeFile(request.outputFile, mockContent);
     await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate delay
+  }
+
+  private async applySimpleActions(request: AgentExecutionRequest): Promise<void> {
+    const normalized = request.taskDescription.toLowerCase();
+    
+    const englishMatch = normalized.match(/(?:create|make|add)\s+(?:a\s+)?([\w\-\/]+)\s+(?:folder|directory)/);
+    const koreanSuffixMatch = request.taskDescription.match(/([\w\-\/]+)\s*폴더/);
+    
+    const folderName = englishMatch?.[1] || koreanSuffixMatch?.[1];
+    if (folderName) {
+      const safeName = folderName.replace(/[^A-Za-z0-9_\-\/]/g, '');
+      if (safeName.length > 0) {
+        const folderPath = path.resolve(process.cwd(), safeName);
+        await fs.ensureDir(folderPath);
+        console.log(`[ClaudeMock] Created folder: ${folderPath}`);
+      }
+    }
   }
 }

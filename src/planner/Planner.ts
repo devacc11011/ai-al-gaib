@@ -4,37 +4,46 @@ import { AgentType } from '../types/agent.js';
 import { randomUUID } from 'crypto';
 
 export class Planner {
-  async createPlan(task: Task, preferredAgent?: string): Promise<Plan> {
+  async createPlan(task: Task, preferredPlanner?: string): Promise<Plan> {
     console.log(`[Planner] Analyzing task: "${task.description}"...`);
 
-    // TODO: In real implementation, this calls Claude/Gemini to generate the plan.
-    // For prototype, we generate a static 2-step plan.
-
+    // Simple heuristic for prototype:
+    // If task contains "read" or "analyze", make an analysis task.
+    // If task contains "create" or "implement", make an implementation task.
+    
     const planId = `plan-${Date.now()}`;
-    const subtasks: Subtask[] = [
-      {
+    const subtasks: Subtask[] = [];
+    const isAnalysis = task.description.toLowerCase().includes('read') || task.description.toLowerCase().includes('analyze') || task.description.toLowerCase().includes('check');
+    
+    // Step 1: Analysis / Reading
+    const analysisAgent = (preferredPlanner as AgentType) || AgentType.CLAUDE;
+
+    subtasks.push({
         id: randomUUID(),
-        title: 'Analyze Requirements',
-        description: `Analyze the requirements for: ${task.description}`,
-        agent: AgentType.GEMINI, // Analysis usually goes to Gemini
+        title: isAnalysis ? `Read/Analyze: ${task.description}` : 'Analyze Requirements',
+        description: `User Request: ${task.description}\nAction: Analyze the request and required context.`,
+        agent: analysisAgent,
         priority: 1,
         inputContextFiles: task.contextFiles || [],
         outputFile: `.ai-al-gaib/contexts/${task.id}/results/1-analysis.md`,
         dependencies: [],
         status: 'pending'
-      },
-      {
-        id: randomUUID(),
-        title: 'Implement Solution',
-        description: `Implement the solution based on analysis.`,
-        agent: (preferredAgent as AgentType) || AgentType.CLAUDE, // Code gen to Claude
-        priority: 2,
-        inputContextFiles: [`.ai-al-gaib/contexts/${task.id}/results/1-analysis.md`],
-        outputFile: `.ai-al-gaib/contexts/${task.id}/results/2-implementation.md`,
-        dependencies: [`${planId}-1`],
-        status: 'pending'
-      }
-    ];
+    });
+
+    // Step 2: Implementation (only if it looks like a modification task)
+    if (!isAnalysis || task.description.toLowerCase().includes('and') || task.description.toLowerCase().includes('create')) {
+        subtasks.push({
+            id: randomUUID(),
+            title: `Execute: ${task.description}`,
+            description: `Based on analysis, implement: ${task.description}`,
+            agent: AgentType.CLAUDE,
+            priority: 2,
+            inputContextFiles: [`.ai-al-gaib/contexts/${task.id}/results/1-analysis.md`],
+            outputFile: `.ai-al-gaib/contexts/${task.id}/results/2-result.md`,
+            dependencies: [],
+            status: 'pending'
+        });
+    }
 
     return {
       id: planId,
