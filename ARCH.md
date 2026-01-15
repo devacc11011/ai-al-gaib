@@ -54,7 +54,7 @@ AI Al-Gaib는 여러 AI 에이전트(Claude Code, Codex, Gemini)를 Planner-Exec
 **Responsibility**: 전체 시스템의 진입점이자 작업 조율자
 
 **Key Functions**:
-- User 명령 파싱 및 라우팅
+- User 명령 파싱 및 라우팅 (Planner/Executor 선택 지원)
 - 에이전트 간 워크플로우 관리
 - 에러 핸들링 및 재시도 로직
 - 최종 결과 집계 및 사용자 피드백
@@ -62,9 +62,9 @@ AI Al-Gaib는 여러 AI 에이전트(Claude Code, Codex, Gemini)를 Planner-Exec
 **Interface**:
 ```typescript
 interface Orchestrator {
-  execute(task: Task): Promise<TaskResult>;
-  routeToPlanner(task: Task): Promise<Plan>;
-  executeWithAgents(plan: Plan): Promise<ExecutionResult>;
+  execute(task: Task, config: ExecutionConfig): Promise<TaskResult>;
+  routeToPlanner(task: Task, plannerName?: string): Promise<Plan>;
+  executeWithAgents(plan: Plan, executorMap?: Map<string, string>): Promise<ExecutionResult>;
 }
 ```
 
@@ -79,9 +79,13 @@ interface Orchestrator {
 - 의존성 그래프 생성
 
 **Agent Selection Strategy**:
-- **Claude Code**: 복잡한 코드 생성, 대규모 리팩토링, 아키텍처 설계
-- **Codex**: 빠른 코드 완성, 단순 함수 생성, 테스트 작성
-- **Gemini**: 코드 분석, 리뷰, 문서화, 설명
+Planner는 기본적으로 작업의 특성에 맞춰 최적의 에이전트를 **추천**하지만, 사용자가 직접 지정한 설정을 우선합니다.
+
+- **Manual Selection**: 사용자가 CLI 플래그(`--planner`, `--executor`) 또는 설정 파일로 지정
+- **Auto Recommendation**:
+  - **Claude Code**: 복잡한 코드 생성, 대규모 리팩토링, 아키텍처 설계
+  - **Codex**: 빠른 코드 완성, 단순 함수 생성, 테스트 작성
+  - **Gemini**: 코드 분석, 리뷰, 문서화, 설명
 
 **Output Format** (Markdown):
 ```markdown
@@ -191,20 +195,20 @@ interface ClaudeCodeAdapter {
 #### Codex Adapter
 ```typescript
 interface CodexAdapter {
-  // OpenAI API를 통한 실행
-  executeCompletion(prompt: string, context: Context): Promise<string>;
+  // CLI 기반 실행 (예: gh copilot alias 또는 openai-cli)
+  executeHeadless(prompt: string, context: Context): Promise<string>;
 
-  // Uses: openai SDK
+  // Uses: child_process (spawning CLI tools)
 }
 ```
 
 #### Gemini Adapter
 ```typescript
 interface GeminiAdapter {
-  // Google AI Studio API
-  analyze(code: string, task: string): Promise<Analysis>;
+  // CLI 기반 실행 (예: gcloud genai 또는 custom wrapper)
+  executeHeadless(code: string, task: string): Promise<Analysis>;
 
-  // Uses: @google/generative-ai
+  // Uses: child_process
 }
 ```
 
@@ -551,11 +555,11 @@ class AgentExecutor {
       // Headless CLI execution
       result = await this.executeClaudeCLI(prompt);
     } else if (subtask.agent === 'codex') {
-      // API call
-      result = await this.executeCodexAPI(prompt);
+      // CLI execution
+      result = await this.executeCodexCLI(prompt);
     } else if (subtask.agent === 'gemini') {
-      // API call
-      result = await this.executeGeminiAPI(prompt);
+      // CLI execution
+      result = await this.executeGeminiCLI(prompt);
     }
 
     // 4. Validate output file was created
@@ -982,11 +986,555 @@ class Executor {
 }
 ```
 
-#### 8. File Naming Convention
+#### 8. Permission & Approval System (헤드리스 모드)
+
+헤드리스 모드에서 에이전트가 권한이 필요한 작업(파일 수정, 명령 실행 등)을 할 때 사용자 승인을 받는 방법:
+
+##### Permission Types
+
+```typescript
+enum PermissionType {
+  FILE_WRITE = 'file_write',        // 파일 생성/수정
+  FILE_DELETE = 'file_delete',      // 파일 삭제
+  COMMAND_EXEC = 'command_exec',    // 시스템 명령 실행
+  GIT_OPERATION = 'git_operation',  // git push, commit 등
+  API_CALL = 'api_call',            // 외부 API 호출
+  PACKAGE_INSTALL = 'package_install', // npm/pip install
+}
+
+interface PermissionRequest {
+  id: string;
+  type: PermissionType;
+  description: string;
+  details: {
+    files?: string[];
+    command?: string;
+    risk_level: 'low' | 'medium' | 'high';
+  };
+  requestedBy: string;  // agent name
+  timestamp: string;
+}
+```
+
+##### Method 1: Permission Request File + IPC (Electron에 최적)
+
+에이전트가 권한 요청 파일을 생성하고, Electron이 실시간으로 감지하여 다이얼로그 표시:
+
+```typescript
+// 1. 에이전트가 권한 요청 파일 생성
+// .ai-al-gaib/permissions/request-{id}.json
+{
+  "id": "perm-123",
+  "type": "file_write",
+  "description": "Create JWT utility functions",
+  "details": {
+    "files": ["src/auth/jwt.ts", "src/auth/types.ts"],
+    "risk_level": "low"
+  },
+  "requestedBy": "claude-code",
+  "timestamp": "2026-01-15T12:00:00Z",
+  "status": "pending"
+}
+
+// 2. Main Process (Node.js)에서 파일 감시
+class PermissionManager extends EventEmitter {
+  private watcher: chokidar.FSWatcher;
+
+  constructor(private permissionDir: string) {
+    this.watcher = chokidar.watch(`${permissionDir}/*.json`);
+
+    this.watcher.on('add', async (path) => {
+      const request = await this.loadRequest(path);
+      if (request.status === 'pending') {
+        // Renderer로 전송
+        this.emit('permission-request', request);
+      }
+    });
+  }
+
+  async waitForApproval(requestId: string, timeout = 60000): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error('Permission request timed out'));
+      }, timeout);
+
+      const watcher = chokidar.watch(
+        `${this.permissionDir}/request-${requestId}.json`
+      );
+
+      watcher.on('change', async () => {
+        const request = await this.loadRequest(
+          `${this.permissionDir}/request-${requestId}.json`
+        );
+
+        if (request.status === 'approved') {
+          clearTimeout(timer);
+          watcher.close();
+          resolve(true);
+        } else if (request.status === 'rejected') {
+          clearTimeout(timer);
+          watcher.close();
+          resolve(false);
+        }
+      });
+    });
+  }
+}
+
+// 3. Renderer (React)에서 다이얼로그 표시
+const PermissionDialog = ({ request, onApprove, onReject }) => (
+  <Dialog open>
+    <DialogTitle>Permission Required</DialogTitle>
+    <DialogContent>
+      <Typography>
+        Agent <strong>{request.requestedBy}</strong> wants to:
+      </Typography>
+      <Typography variant="body2">{request.description}</Typography>
+
+      <Alert severity={request.details.risk_level === 'high' ? 'error' : 'info'}>
+        Risk Level: {request.details.risk_level.toUpperCase()}
+      </Alert>
+
+      {request.details.files && (
+        <List>
+          {request.details.files.map(file => (
+            <ListItem key={file}>
+              <ListItemIcon><FileIcon /></ListItemIcon>
+              <ListItemText primary={file} />
+            </ListItem>
+          ))}
+        </List>
+      )}
+    </DialogContent>
+    <DialogActions>
+      <Button onClick={onReject} color="error">Reject</Button>
+      <Button onClick={onApprove} color="primary" variant="contained">
+        Approve
+      </Button>
+    </DialogActions>
+  </Dialog>
+);
+
+// 4. 승인/거부 처리
+ipcRenderer.on('permission-request', async (event, request) => {
+  const approved = await showPermissionDialog(request);
+
+  // 요청 파일 업데이트
+  ipcRenderer.send('permission-response', {
+    id: request.id,
+    status: approved ? 'approved' : 'rejected'
+  });
+});
+```
+
+##### Method 2: Pre-configured Auto-Approval Rules
+
+미리 설정된 규칙에 따라 자동 승인:
+
+```typescript
+// .ai-al-gaib/config/permissions.json
+{
+  "auto_approve": {
+    "file_write": {
+      "allowed_patterns": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "!src/**/*.config.*"  // config 파일 제외
+      ],
+      "max_files": 10
+    },
+    "command_exec": {
+      "whitelist": [
+        "npm test",
+        "npm run build",
+        "git status",
+        "git diff"
+      ],
+      "blacklist": [
+        "rm -rf",
+        "git push --force",
+        "sudo *"
+      ]
+    }
+  },
+  "always_ask": [
+    "file_delete",
+    "git_operation",
+    "package_install"
+  ]
+}
+
+// Auto-approval checker
+class AutoApprovalChecker {
+  constructor(private config: PermissionConfig) {}
+
+  canAutoApprove(request: PermissionRequest): boolean {
+    const rule = this.config.auto_approve[request.type];
+
+    if (!rule) return false;
+
+    switch (request.type) {
+      case PermissionType.FILE_WRITE:
+        return this.checkFileWriteRule(request, rule);
+
+      case PermissionType.COMMAND_EXEC:
+        return this.checkCommandRule(request, rule);
+
+      default:
+        return false;
+    }
+  }
+
+  private checkFileWriteRule(
+    request: PermissionRequest,
+    rule: FileWriteRule
+  ): boolean {
+    const files = request.details.files || [];
+
+    // 최대 파일 수 체크
+    if (files.length > rule.max_files) {
+      return false;
+    }
+
+    // 각 파일이 허용된 패턴에 매칭되는지 확인
+    return files.every(file =>
+      micromatch.isMatch(file, rule.allowed_patterns)
+    );
+  }
+
+  private checkCommandRule(
+    request: PermissionRequest,
+    rule: CommandRule
+  ): boolean {
+    const command = request.details.command || '';
+
+    // Blacklist 체크
+    if (rule.blacklist.some(pattern =>
+      micromatch.isMatch(command, pattern)
+    )) {
+      return false;
+    }
+
+    // Whitelist 체크
+    return rule.whitelist.some(pattern =>
+      micromatch.isMatch(command, pattern)
+    );
+  }
+}
+```
+
+##### Method 3: Approval Queue (Batch Processing)
+
+권한 요청을 큐에 모아서 일괄 처리:
+
+```typescript
+class ApprovalQueue {
+  private queue: PermissionRequest[] = [];
+  private processing = false;
+
+  async add(request: PermissionRequest): Promise<boolean> {
+    // Auto-approval 체크
+    if (this.autoApprovalChecker.canAutoApprove(request)) {
+      await this.approve(request);
+      return true;
+    }
+
+    // 큐에 추가
+    this.queue.push(request);
+
+    // UI에 알림 (뱃지 카운트)
+    this.notifyUI({ queueLength: this.queue.length });
+
+    // 승인 대기
+    return await this.waitForApproval(request.id);
+  }
+
+  async processBatch(): Promise<void> {
+    if (this.processing || this.queue.length === 0) return;
+
+    this.processing = true;
+
+    // 모든 대기 중인 요청을 UI에 표시
+    const results = await this.showBatchApprovalDialog(this.queue);
+
+    // 결과 처리
+    for (const [requestId, approved] of Object.entries(results)) {
+      const request = this.queue.find(r => r.id === requestId);
+      if (request) {
+        if (approved) {
+          await this.approve(request);
+        } else {
+          await this.reject(request);
+        }
+      }
+    }
+
+    this.queue = [];
+    this.processing = false;
+  }
+}
+
+// Electron Renderer - Batch Approval UI
+const BatchApprovalDialog = ({ requests, onSubmit }) => {
+  const [selections, setSelections] = useState({});
+
+  return (
+    <Dialog open fullWidth maxWidth="md">
+      <DialogTitle>
+        Approve Pending Actions ({requests.length})
+      </DialogTitle>
+      <DialogContent>
+        <List>
+          {requests.map(req => (
+            <ListItem key={req.id}>
+              <Checkbox
+                checked={selections[req.id] || false}
+                onChange={(e) => setSelections({
+                  ...selections,
+                  [req.id]: e.target.checked
+                })}
+              />
+              <ListItemText
+                primary={req.description}
+                secondary={`${req.requestedBy} - ${req.type}`}
+              />
+              <Chip
+                label={req.details.risk_level}
+                color={req.details.risk_level === 'high' ? 'error' : 'default'}
+              />
+            </ListItem>
+          ))}
+        </List>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => onSubmit({})}>Reject All</Button>
+        <Button onClick={() => {
+          const all = {};
+          requests.forEach(r => all[r.id] = true);
+          onSubmit(all);
+        }}>
+          Approve All
+        </Button>
+        <Button
+          variant="contained"
+          onClick={() => onSubmit(selections)}
+        >
+          Apply Selected
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+```
+
+##### Method 4: Agent Prompt Modification
+
+에이전트 프롬프트에 권한 요청 프로토콜을 명시:
+
+```typescript
+const promptWithPermissions = `
+${basePrompt}
+
+PERMISSION PROTOCOL:
+When you need to perform actions that require user approval:
+
+1. Create a permission request file:
+   Path: ${permissionDir}/request-{uuid}.json
+
+2. Format:
+\`\`\`json
+{
+  "id": "unique-id",
+  "type": "file_write | file_delete | command_exec | git_operation",
+  "description": "Human-readable description",
+  "details": {
+    "files": ["list", "of", "files"],
+    "command": "command to execute",
+    "risk_level": "low | medium | high"
+  },
+  "status": "pending"
+}
+\`\`\`
+
+3. WAIT for the file to be updated with status "approved" or "rejected"
+
+4. If approved, proceed with the action
+   If rejected, skip the action and note it in your output
+
+Example workflow:
+- You want to create src/auth/jwt.ts
+- Create permission request file
+- Wait for approval (max 60 seconds)
+- If approved: create the file
+- If rejected or timeout: skip and note in output MD
+
+IMPORTANT:
+- Always request permission for destructive actions (delete, force push)
+- Group related file operations into one request
+- Set appropriate risk_level
+`;
+```
+
+##### Method 5: Sandbox Mode with Post-Review
+
+안전한 샌드박스에서 먼저 실행하고, 결과를 리뷰 후 적용:
+
+```typescript
+class SandboxExecutor {
+  async executeInSandbox(subtask: Subtask): Promise<SandboxResult> {
+    // 1. 임시 디렉토리에 프로젝트 복사
+    const sandboxDir = await this.createSandbox();
+
+    // 2. 샌드박스에서 에이전트 실행
+    const result = await this.executeAgent(subtask, sandboxDir);
+
+    // 3. 변경 사항 diff 생성
+    const changes = await this.computeDiff(sandboxDir, this.projectDir);
+
+    return {
+      result,
+      changes,
+      sandboxDir
+    };
+  }
+
+  async showChangesForReview(changes: FileChanges[]): Promise<boolean> {
+    // Electron UI에 diff 표시
+    return new Promise((resolve) => {
+      ipcRenderer.send('show-changes-review', changes);
+
+      ipcRenderer.once('changes-review-response', (event, approved) => {
+        resolve(approved);
+      });
+    });
+  }
+
+  async applyChanges(changes: FileChanges[]): Promise<void> {
+    for (const change of changes) {
+      if (change.type === 'create') {
+        await fs.copy(change.sandboxPath, change.targetPath);
+      } else if (change.type === 'modify') {
+        await fs.copy(change.sandboxPath, change.targetPath);
+      } else if (change.type === 'delete') {
+        await fs.remove(change.targetPath);
+      }
+    }
+  }
+}
+
+// 사용
+const sandbox = new SandboxExecutor();
+const { changes } = await sandbox.executeInSandbox(subtask);
+
+// 변경사항 리뷰
+const approved = await sandbox.showChangesForReview(changes);
+
+if (approved) {
+  await sandbox.applyChanges(changes);
+} else {
+  console.log('Changes rejected by user');
+}
+```
+
+##### 각 방법 비교
+
+| Method | 실시간성 | 안전성 | UX | 복잡도 | 추천 |
+|--------|---------|-------|-----|-------|------|
+| Permission File + IPC | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Medium | ✅ Electron |
+| Auto-Approval Rules | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | Low | ✅ 자동화 |
+| Approval Queue | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Medium | 대량 작업 |
+| Prompt Protocol | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | Low | ✅ 기본 |
+| Sandbox + Review | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | High | 🎯 최고 안전 |
+
+##### 권장 조합 (Hybrid)
+
+```typescript
+class PermissionOrchestrator {
+  async requestPermission(request: PermissionRequest): Promise<boolean> {
+    // 1. Auto-approval 체크
+    if (this.autoApprovalChecker.canAutoApprove(request)) {
+      await this.logApproval(request, 'auto');
+      return true;
+    }
+
+    // 2. 실시간 승인 요청 (Electron)
+    if (this.isElectronMode) {
+      const approved = await this.requestViaIPC(request);
+      await this.logApproval(request, approved ? 'user' : 'rejected');
+      return approved;
+    }
+
+    // 3. CLI 모드 - 승인 큐에 추가
+    this.queue.add(request);
+    console.log(`Permission required. Run 'ai-al-gaib approve' to review.`);
+    return await this.queue.waitForApproval(request.id);
+  }
+}
+```
+
+##### Electron UI 통합 예시
+
+```tsx
+// Main Process
+const permissionManager = new PermissionManager('./.ai-al-gaib/permissions');
+
+permissionManager.on('permission-request', (request) => {
+  mainWindow.webContents.send('permission-request', request);
+});
+
+ipcMain.on('permission-response', async (event, { id, approved }) => {
+  await permissionManager.respond(id, approved);
+});
+
+// Renderer Process
+const App = () => {
+  const [permissionRequest, setPermissionRequest] = useState(null);
+
+  useEffect(() => {
+    ipcRenderer.on('permission-request', (event, request) => {
+      setPermissionRequest(request);
+    });
+  }, []);
+
+  const handleApprove = () => {
+    ipcRenderer.send('permission-response', {
+      id: permissionRequest.id,
+      approved: true
+    });
+    setPermissionRequest(null);
+  };
+
+  const handleReject = () => {
+    ipcRenderer.send('permission-response', {
+      id: permissionRequest.id,
+      approved: false
+    });
+    setPermissionRequest(null);
+  };
+
+  return (
+    <>
+      {/* Main UI */}
+      <MainView />
+
+      {/* Permission Dialog */}
+      {permissionRequest && (
+        <PermissionDialog
+          request={permissionRequest}
+          onApprove={handleApprove}
+          onReject={handleReject}
+        />
+      )}
+    </>
+  );
+};
+```
+
+#### 9. File Naming Convention
 
 ```
 .ai-al-gaib/
-└── contexts/
+├── contexts/
     └── task-{timestamp}-{hash}/
         ├── input.md                    # 원본 사용자 입력
         ├── summary.md                  # 컨텍스트 요약
@@ -1091,9 +1639,6 @@ status: failure
 ```json
 {
   "dependencies": {
-    "@anthropic-ai/sdk": "^latest",
-    "openai": "^latest",
-    "@google/generative-ai": "^latest",
     "commander": "^latest",
     "inquirer": "^latest",
     "chalk": "^latest",
@@ -1446,12 +1991,12 @@ Press Tab to switch views, Ctrl+C to cancel
 
 #### Option 5: Electron Desktop App (강력 추천!)
 
-**Library**: Electron + React + xterm.js
+**Library**: Electron + React + shadcn/ui + Tailwind CSS
 
 **장점**:
 - 터미널 출력 + MD 파일 미리보기를 **동시에** 볼 수 있음
 - 네이티브 파일 시스템 접근
-- VS Code와 유사한 UX
+- VS Code와 유사한 현대적이고 깔끔한 UX (shadcn/ui 기반)
 - 오프라인 작동
 - 멀티 패널 레이아웃
 - Markdown 실시간 렌더링
@@ -1527,6 +2072,9 @@ ai-al-gaib-ui
   "dependencies": {
     "electron": "^28.0.0",
     "react": "^18.0.0",
+    "shadcn-ui": "^latest",      // UI Components
+    "tailwind-css": "^latest",    // Styling for shadcn
+    "lucide-react": "^latest",    // Icons
     "xterm": "^5.3.0",
     "react-markdown": "^9.0.0",
     "prismjs": "^1.29.0",
