@@ -13,6 +13,13 @@ export interface PermissionRequest {
   rawText: string;
 }
 
+export interface RunOptions {
+  planner?: string;
+  executor?: string;
+  skills?: Skill[];
+  yoloMode?: boolean;
+}
+
 export interface ExecutionCallbacks {
   onLog?: (message: string) => void;
   onPlanCreated?: (plan: any) => void;
@@ -78,7 +85,7 @@ export class Orchestrator {
 
   async runFullFlow(
     description: string,
-    options: { planner?: string; executor?: string; skills?: Skill[] },
+    options: RunOptions = {},
     callbacks?: ExecutionCallbacks
   ): Promise<void> {
     this.abortController = new AbortController();
@@ -155,6 +162,11 @@ export class Orchestrator {
                         callbacks?.onLog?.(chunk.trimEnd());
                     },
                     onPermissionRequest: (request: PermissionRequest, respond: (allow: boolean) => void) => {
+                        if (options?.yoloMode) {
+                            log(`[Orchestrator] YOLO mode auto-approved permission: ${request.type} - ${request.description}`);
+                            respond(true);
+                            return;
+                        }
                         callbacks?.onPermissionRequest?.(request, respond);
                     },
                     abortSignal: signal

@@ -1,5 +1,6 @@
 import * as pty from 'node-pty';
 import { logger } from './logger.js';
+import { logCliCommand } from './cliLogger.js';
 import { EventEmitter } from 'events';
 
 export interface PermissionRequest {
@@ -37,6 +38,7 @@ export class PtyManager extends EventEmitter {
         const shell = process.platform === 'win32' ? 'cmd.exe' : 'bash';
 
         // Start pty with claude command
+        logCliCommand([shell, '-c', 'claude -p - 2>&1'], this.options.cwd);
         this.ptyProcess = pty.spawn(shell, ['-c', `claude -p - 2>&1`], {
           name: 'xterm-color',
           cols: 120,

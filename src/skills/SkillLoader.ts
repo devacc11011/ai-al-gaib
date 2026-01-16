@@ -2,6 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { spawn } from 'child_process';
 import { logger } from '../utils/logger.js';
+import { logCliCommand } from '../utils/cliLogger.js';
 
 export interface Skill {
   name: string;
@@ -128,6 +129,7 @@ async function loadSkillsFromDir(skillsDir: string, agent: 'claude' | 'gemini' |
  */
 async function runCommand(cmd: string, args: string[], cwd: string, timeout: number = 30000): Promise<string> {
   return new Promise((resolve, reject) => {
+    logCliCommand([cmd, ...args], cwd);
     const child = spawn(cmd, args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],

@@ -2,6 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { spawn } from 'child_process';
 import { logger } from '../utils/logger.js';
+import { logCliCommand } from '../utils/cliLogger.js';
 
 // Skill documentation references for prompt injection
 const SKILL_DOCS = {
@@ -267,6 +268,7 @@ Generate the complete SKILL.md content now:
 
   private async runClaude(prompt: string, cwd: string, log: (msg: string) => void): Promise<string> {
     return new Promise((resolve, reject) => {
+      logCliCommand(['claude', '-p', '-', '--dangerously-skip-permissions'], cwd);
       const child = spawn('claude', ['-p', '-', '--dangerously-skip-permissions'], {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd,
@@ -307,6 +309,7 @@ Generate the complete SKILL.md content now:
 
   private async runGemini(prompt: string, cwd: string, log: (msg: string) => void): Promise<string> {
     return new Promise((resolve, reject) => {
+      logCliCommand(['gemini', '-p', prompt], cwd);
       const child = spawn('gemini', ['-p', prompt], {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd,
@@ -344,6 +347,7 @@ Generate the complete SKILL.md content now:
   private async runCodex(prompt: string, cwd: string, log: (msg: string) => void): Promise<string> {
     return new Promise((resolve, reject) => {
       // Codex CLI - adjust command as needed
+      logCliCommand(['codex', '-q', prompt], cwd);
       const child = spawn('codex', ['-q', prompt], {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd,

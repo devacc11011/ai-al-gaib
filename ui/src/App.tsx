@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Folder, FileText, Play, Terminal as TerminalIcon, CheckCircle2, Circle, Loader2, XCircle, ChevronRight, ChevronDown, ListTodo, ExternalLink, Zap, RefreshCw, Menu, Plus, X, Wand2 } from 'lucide-react'
+import { Folder, FileText, Play, Terminal as TerminalIcon, CheckCircle2, Circle, Loader2, XCircle, ChevronRight, ChevronDown, ListTodo, ExternalLink, Zap, RefreshCw, Menu, Plus, X, Wand2, ShieldAlert, ClipboardList } from 'lucide-react'
 
 // Safe electron import
 const electron = window.require ? window.require('electron') : null;
@@ -398,6 +398,214 @@ interface SkillGeneratorModalProps {
 type TargetAgentType = AgentType | 'all';
 const TARGET_AGENTS: TargetAgentType[] = ['all', 'claude', 'codex', 'gemini'];
 
+interface ProjectPromptBuilderModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  workspaceRoot: string;
+}
+
+const ProjectPromptBuilderModal = ({ isOpen, onClose, workspaceRoot }: ProjectPromptBuilderModalProps) => {
+  const [projectName, setProjectName] = useState('');
+  const [projectSummary, setProjectSummary] = useState('');
+  const [agent, setAgent] = useState<AgentType>('claude');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [logMessages, setLogMessages] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [resultPath, setResultPath] = useState<string | null>(null);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logMessages]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setProjectName('');
+      setProjectSummary('');
+      setAgent('claude');
+      setIsGenerating(false);
+      setLogMessages([]);
+      setError(null);
+      setResultPath(null);
+    }
+  }, [isOpen]);
+
+  const handleGenerate = async () => {
+    if (!projectName.trim()) {
+      setError('Project name is required');
+      return;
+    }
+    if (!workspaceRoot) {
+      setError('Select a workspace directory first');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+    setResultPath(null);
+    setLogMessages(['Starting project prompt builder...']);
+
+    try {
+      const result = await ipcRenderer.invoke('generate-project-prompt', {
+        projectName: projectName.trim(),
+        projectDescription: projectSummary.trim(),
+        agent,
+        workspaceRoot,
+      });
+
+      if (result.success) {
+        setResultPath(result.path || null);
+        setLogMessages(prev => [
+          ...prev,
+          result.path ? `✓ Prompt saved to: ${result.path}` : '✓ Prompt generated',
+        ]);
+      } else {
+        setError(result.error || 'Failed to generate project prompt');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate project prompt');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!ipcRenderer || !isOpen) return;
+    const logHandler = (_: any, msg: string) => {
+      setLogMessages(prev => [...prev, msg]);
+    };
+    ipcRenderer.on('project-prompt-log', logHandler);
+    return () => {
+      ipcRenderer.removeListener('project-prompt-log', logHandler);
+    };
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className="bg-card border border-border rounded-lg w-full max-w-2xl mx-4 shadow-2xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <div className="flex items-center gap-2">
+            <ClipboardList className="w-5 h-5 text-blue-400" />
+            <h2 className="text-lg font-bold">Project Prompt Builder</h2>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={isGenerating}
+            className="p-1 hover:bg-muted rounded disabled:opacity-50"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-4 overflow-auto flex-1">
+          <div className="bg-muted/30 border border-border rounded-md p-3 text-xs text-muted-foreground leading-relaxed">
+            <p className="font-semibold text-foreground mb-1">Purpose</p>
+            <p>
+              Generates an English kick-off prompt that forces the selected agent to ask clarifying questions,
+              capture rules, and document project guardrails before any coding happens.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Project Name</label>
+            <input
+              type="text"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              disabled={isGenerating}
+              placeholder="e.g., ai-al-gaib"
+              className="w-full px-3 py-2 bg-muted border border-border rounded-md text-sm disabled:opacity-50"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Project Summary / Context</label>
+            <textarea
+              value={projectSummary}
+              onChange={(e) => setProjectSummary(e.target.value)}
+              disabled={isGenerating}
+              rows={4}
+              placeholder="Describe the project's purpose, stakeholders, known constraints, etc."
+              className="w-full px-3 py-2 bg-muted border border-border rounded-md text-sm disabled:opacity-50 resize-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Agent</label>
+            <select
+              value={agent}
+              onChange={(e) => setAgent(e.target.value as AgentType)}
+              disabled={isGenerating}
+              className="w-full px-3 py-2 bg-muted border border-border rounded-md text-sm disabled:opacity-50"
+            >
+              {AVAILABLE_AGENTS.map(a => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground mt-1">
+              The selected agent will receive the questionnaire prompt and produce PROJECT_PROMPT.md
+            </p>
+          </div>
+
+          {logMessages.length > 0 && (
+            <div className="bg-zinc-950 rounded-md p-3 max-h-48 overflow-auto border border-border/60">
+              <div className="text-xs font-mono space-y-1">
+                {logMessages.map((log, idx) => (
+                  <div key={idx} className={log.startsWith('✓') ? 'text-green-400' : 'text-zinc-400'}>
+                    {log}
+                  </div>
+                ))}
+                <div ref={logEndRef} />
+              </div>
+            </div>
+          )}
+
+          {resultPath && (
+            <div className="bg-green-500/10 border border-green-500/40 rounded-md p-3 text-sm text-green-300">
+              Prompt saved to <span className="font-mono">{resultPath}</span>
+            </div>
+          )}
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-md p-3 text-sm text-red-400">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 p-4 border-t border-border">
+          <button
+            onClick={onClose}
+            disabled={isGenerating}
+            className="px-4 py-2 text-sm rounded-md hover:bg-muted disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleGenerate}
+            disabled={isGenerating || !projectName.trim()}
+            className="px-4 py-2 text-sm rounded-md bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50 flex items-center gap-2"
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <ClipboardList className="w-4 h-4" />
+                Generate Prompt
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const SkillGeneratorModal = ({ isOpen, onClose, workspaceRoot, onSkillCreated }: SkillGeneratorModalProps) => {
   const [skillName, setSkillName] = useState('');
   const [skillDescription, setSkillDescription] = useState('');
@@ -447,7 +655,16 @@ const SkillGeneratorModal = ({ isOpen, onClose, workspaceRoot, onSkillCreated }:
       });
 
       if (result.success) {
-        setGenerationLog(prev => [...prev, `✓ Skill created at: ${result.path}`]);
+        if (result.paths && Array.isArray(result.paths) && result.paths.length > 0) {
+          setGenerationLog(prev => [
+            ...prev,
+            ...result.paths.map((p: string) => `✓ Skill created at: ${p}`)
+          ]);
+        } else if (result.path) {
+          setGenerationLog(prev => [...prev, `✓ Skill created at: ${result.path}`]);
+        } else {
+          setGenerationLog(prev => [...prev, '✓ Skill created']);
+        }
         onSkillCreated();
         setTimeout(() => {
           onClose();
@@ -635,7 +852,9 @@ function MainApp() {
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [loadingSkills, setLoadingSkills] = useState(false);
   const [skillGeneratorOpen, setSkillGeneratorOpen] = useState(false);
+  const [projectPromptOpen, setProjectPromptOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [yoloMode, setYoloMode] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -713,6 +932,19 @@ function MainApp() {
     );
   };
 
+  const toggleYoloMode = () => {
+    setYoloMode(prev => {
+      const next = !prev;
+      setLogs(logs => [
+        ...logs,
+        next
+          ? '[YOLO] Enabled - permissions will be auto-approved for upcoming runs'
+          : '[YOLO] Disabled - permission prompts will require approval'
+      ]);
+      return next;
+    });
+  };
+
   const getAllSkills = (): Skill[] => {
     return [...skills.claude, ...skills.gemini, ...skills.codex];
   };
@@ -729,13 +961,19 @@ function MainApp() {
     if (!input.trim()) return
 
     const cmd = input.trim()
-    const skillsLog = selectedSkills.length > 0 ? `, Skills: ${selectedSkills.join(', ')}` : '';
-    setLogs(prev => [...prev, `$ ${cmd}`, `[Config] Planner: ${planner}, Executor: ${executor}${skillsLog}`]);
+    const configParts = [`Planner: ${planner}`, `Executor: ${executor}`];
+    if (selectedSkills.length > 0) {
+      configParts.push(`Skills: ${selectedSkills.join(', ')}`);
+    }
+    if (yoloMode) {
+      configParts.push('YOLO: ON');
+    }
+    setLogs(prev => [...prev, `$ ${cmd}`, `[Config] ${configParts.join(', ')}`]);
     setInput('');
     setIsExecuting(true);
     setStatus({ planning: 'idle', execution: 'idle' });
     setCurrentPlan(null);
-    ipcRenderer.send('execute-task', { task: cmd, options: { planner, executor, skills: selectedSkills } });
+    ipcRenderer.send('execute-task', { task: cmd, options: { planner, executor, skills: selectedSkills, yoloMode } });
   }
 
   const handleFileSelect = (path: string) => {
@@ -777,6 +1015,11 @@ function MainApp() {
         workspaceRoot={cwd}
         onSkillCreated={loadSkills}
       />
+      <ProjectPromptBuilderModal
+        isOpen={projectPromptOpen}
+        onClose={() => setProjectPromptOpen(false)}
+        workspaceRoot={cwd}
+      />
 
       {/* Header */}
       <div className="h-14 border-b flex items-center px-4 justify-between bg-card shrink-0">
@@ -808,6 +1051,16 @@ function MainApp() {
                   >
                     <Wand2 className="w-4 h-4 text-purple-400" />
                     Generate Skill
+                  </button>
+                  <button
+                    onClick={() => {
+                      setProjectPromptOpen(true);
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted transition-colors"
+                  >
+                    <ClipboardList className="w-4 h-4 text-blue-400" />
+                    Project Prompt Builder
                   </button>
                   <button
                     onClick={() => {
@@ -873,6 +1126,19 @@ function MainApp() {
                   ))}
                 </select>
             </div>
+            <button
+              type="button"
+              onClick={toggleYoloMode}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-semibold transition-colors ${
+                yoloMode
+                  ? 'border-red-500/60 text-red-300 bg-red-500/10'
+                  : 'border-border text-muted-foreground bg-muted/30'
+              }`}
+              title="YOLO Mode auto-approves permission prompts"
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>YOLO {yoloMode ? 'ON' : 'OFF'}</span>
+            </button>
         </div>
       </div>
 

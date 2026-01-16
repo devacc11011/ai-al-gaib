@@ -1,5 +1,7 @@
 # AI Al-Gaib
 
+<span style="color: red; font-weight: bold;">⚠️ 이 프로젝트는 코드 한 줄도 직접 검증하지 않은 바이브 코딩 결과물입니다. 실제 사용 시 반드시 <code>logs/cli.log</code>를 확인하여 어떤 명령이 실행되었는지 검증하십시오.</span>
+
 ![img.png](img.png)
 
 > Multi-Agent AI Orchestration System - Claude, Gemini, Codex를 하나의 인터페이스에서 통합 관리
@@ -99,6 +101,10 @@ ai-al-gaib plan "Refactor database layer" -p claude -e gemini -r
 5. Generate 클릭
 
 생성된 스킬은 `{workspace}/.{agent}/skills/{name}/SKILL.md`에 저장됩니다.
+
+### Project Prompt Builder
+
+새 프로젝트를 정렬할 때 **Menu → Project Prompt Builder**를 열어 워크스페이스 폴더와 사용할 에이전트를 지정하면, 시스템이 영어로 작성된 질문지/작업 규칙 템플릿을 생성하여 `PROJECT_PROMPT.md`에 저장합니다. 이 템플릿은 프로젝트 성격, 기술 스택, 아키텍처, 컨벤션, 테스트, 위험 구간, 완료 조건에 대한 질문을 단계적으로 제시하고, 답변 이후 규칙/가드레일/완료 기준을 정리하도록 모든 에이전트에 주입할 수 있습니다.
 
 ## Project Structure
 

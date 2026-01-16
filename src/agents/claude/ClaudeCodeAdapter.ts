@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import { execa } from 'execa';
 import path from 'path';
 import { logger } from '../../utils/logger.js';
+import { logCliCommand } from '../../utils/cliLogger.js';
 import * as pty from 'node-pty';
 
 export class ClaudeCodeAdapter extends Agent {
@@ -91,6 +92,7 @@ export class ClaudeCodeAdapter extends Agent {
       const shell = process.platform === 'win32' ? 'cmd.exe' : 'bash';
 
       // Start pty with claude command (without --dangerously-skip-permissions)
+      logCliCommand([shell, '-c', 'claude -p -'], cwd);
       this.currentPty = pty.spawn(shell, ['-c', 'claude -p -'], {
         name: 'xterm-color',
         cols: 120,
@@ -238,7 +240,9 @@ Format as Markdown with Frontmatter.
             console.log(`[Claude-Local] Detected Next.js creation task. App Name: ${appName}`);
             request.onOutput?.(`[Claude-Local] Running: npx create-next-app@latest ${appName} --typescript --tailwind --eslint --yes\n`);
             
-            await execa('npx', ['create-next-app@latest', appName, '--typescript', '--tailwind', '--eslint', '--yes'], {
+            const createArgs = ['create-next-app@latest', appName, '--typescript', '--tailwind', '--eslint', '--yes'];
+            logCliCommand(['npx', ...createArgs], process.cwd());
+            await execa('npx', createArgs, {
                 cwd: process.cwd(),
                 stdio: 'inherit'
             });

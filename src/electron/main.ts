@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { Orchestrator } from '../orchestrator/Orchestrator.js';
 import { SkillLoader, Skill, SkillsByAgent } from '../skills/SkillLoader.js';
 import { SkillGenerator, SkillGenerationRequest } from '../skills/SkillGenerator.js';
+import { ProjectPromptBuilder, ProjectPromptRequest } from '../prompts/ProjectPromptBuilder.js';
 import chokidar, { FSWatcher } from 'chokidar';
 import fs from 'fs';
 import { logger } from '../utils/logger.js';
@@ -23,6 +24,7 @@ orchestrator.setWorkspaceRoot(workspaceRoot);
 
 const skillLoader = new SkillLoader(workspaceRoot);
 const skillGenerator = new SkillGenerator();
+const projectPromptBuilder = new ProjectPromptBuilder();
 
 // Store pending permission callback
 let pendingPermissionRespond: ((allow: boolean) => void) | null = null;
@@ -244,6 +246,7 @@ ipcMain.on('read-file', (event, filePath) => {
 ipcMain.on('execute-task', async (event, { task, options }) => {
   const sender = event.sender;
   const selectedSkills = options?.skills || [];
+  const yoloMode = options?.yoloMode ?? false;
   logger.info(`[IPC] Received task: ${task}, planner: ${options?.planner}, executor: ${options?.executor}, skills: ${selectedSkills.length}`);
 
   // Open Planner Window on task start
@@ -264,13 +267,21 @@ ipcMain.on('execute-task', async (event, { task, options }) => {
   try {
     sender.send('log', `[System] Received task: "${task}"`);
     sender.send('log', `[System] Planner: ${options?.planner || 'claude'}, Executor: ${options?.executor || 'claude'}`);
+    if (yoloMode) {
+      sender.send('log', `[System] YOLO Mode: ENABLED - permissions auto-approved`);
+    }
     if (skillContents.length > 0) {
       sender.send('log', `[System] Active Skills: ${skillContents.map(s => s.name).join(', ')}`);
     }
     sender.send('status-update', { phase: 'planning', status: 'running' });
 
     // Use runFullFlow with callbacks to stream updates to UI
-    await orchestrator.runFullFlow(task, { planner: options?.planner, executor: options?.executor, skills: skillContents }, {
+    await orchestrator.runFullFlow(task, {
+      planner: options?.planner,
+      executor: options?.executor,
+      skills: skillContents,
+      yoloMode
+    }, {
       onLog: (msg) => {
         sender.send('log', msg);
         // Also send to executor window
@@ -394,6 +405,23 @@ ipcMain.handle('generate-skill', async (event, request: SkillGenerationRequest) 
     return result;
   } catch (err: any) {
     logger.error(`[IPC] Skill generation failed: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('generate-project-prompt', async (event, request: ProjectPromptRequest) => {
+  logger.info(`[IPC] Project prompt request for ${request.projectName} using ${request.agent}`);
+
+  try {
+    const result = await projectPromptBuilder.build(
+      { ...request, workspaceRoot: request.workspaceRoot || workspaceRoot },
+      (msg) => {
+        event.sender.send('project-prompt-log', msg);
+      }
+    );
+    return result;
+  } catch (err: any) {
+    logger.error(`[IPC] Project prompt generation failed: ${err.message}`);
     return { success: false, error: err.message };
   }
 });

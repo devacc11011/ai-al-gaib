@@ -8,6 +8,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { execa } from 'execa';
 import { logger } from '../utils/logger.js';
+import { logCliCommand } from '../utils/cliLogger.js';
 
 export interface PlannerOptions {
   plannerAgent?: string;
@@ -70,6 +71,7 @@ Output Format (JSON only, no explanation):
             // Use stdin to pass prompt safely (avoids shell escaping issues)
             log(`[DEBUG] Starting subprocess with spawn...`);
 
+            logCliCommand(['claude', '-p', '-', '--dangerously-skip-permissions'], cwd);
             rawOutput = await new Promise<string>((resolve, reject) => {
                 const child = spawn('claude', ['-p', '-', '--dangerously-skip-permissions'], {
                     stdio: ['pipe', 'pipe', 'pipe'],
@@ -117,10 +119,14 @@ Output Format (JSON only, no explanation):
             log(`CLI execution completed. Output length: ${rawOutput?.length || 0}`);
 
         } else if (plannerAgent === 'gemini') {
-            const { stdout } = await execa('gcloud', ['ai', 'generate', '--prompt-file', instructionFile]);
+            const gcloudArgs = ['ai', 'generate', '--prompt-file', instructionFile];
+            logCliCommand(['gcloud', ...gcloudArgs], cwd);
+            const { stdout } = await execa('gcloud', gcloudArgs);
             rawOutput = stdout;
         } else if (plannerAgent === 'codex') {
-            const { stdout } = await execa('gh', ['copilot', 'suggest', '-t', 'shell', fs.readFileSync(instructionFile, 'utf-8')]);
+            const ghArgs = ['copilot', 'suggest', '-t', 'shell', fs.readFileSync(instructionFile, 'utf-8')];
+            logCliCommand(['gh', ...ghArgs], cwd);
+            const { stdout } = await execa('gh', ghArgs);
             rawOutput = stdout;
         } else {
              throw new Error(`Unknown planner agent: ${plannerAgent}`);
