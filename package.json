@@ -1,6 +1,6 @@
 {
   "name": "ai-al-gaib",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "Multi-Agent AI Orchestration System",
   "author": "devacc11011 <devacc11011@users.noreply.github.com>",
   "main": "dist/electron/main.js",
