@@ -1,6 +1,7 @@
 import { Task } from '../types/task.js';
 import { Plan, Subtask } from '../types/plan.js';
 import { AgentType } from '../types/agent.js';
+import { Skill, generateSkillPrompt } from '../skills/SkillLoader.js';
 import { randomUUID } from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
@@ -8,27 +9,39 @@ import { spawn } from 'child_process';
 import { execa } from 'execa';
 import { logger } from '../utils/logger.js';
 
+export interface PlannerOptions {
+  plannerAgent?: string;
+  executorAgent?: string;
+  skills?: Skill[];
+  onOutput?: (chunk: string) => void;
+  workspaceRoot?: string;
+}
+
 export class Planner {
-  async createPlan(task: Task, plannerAgent: string = 'claude', onOutput?: (chunk: string) => void, workspaceRoot?: string): Promise<Plan> {
+  async createPlan(task: Task, options: PlannerOptions = {}): Promise<Plan> {
+    const { plannerAgent = 'claude', executorAgent = 'claude', skills = [], onOutput, workspaceRoot } = options;
     const cwd = workspaceRoot || process.cwd();
     const log = (msg: string) => {
         onOutput?.(`[Planner] ${msg}\n`);
         logger.info(`[Planner] ${msg}`);
     };
-    log(`Generating plan using ${plannerAgent} in ${cwd}...`);
+    log(`Generating plan using ${plannerAgent} (executor: ${executorAgent}) in ${cwd}...`);
+    if (skills.length > 0) {
+        log(`Active skills: ${skills.map(s => s.name).join(', ')}`);
+    }
 
     const planId = `plan-${Date.now()}`;
     const contextDir = path.resolve(cwd, `.ai-al-gaib/contexts/${task.id}`);
     await fs.ensureDir(contextDir);
 
+    // Generate skill prompt if skills are provided
+    const skillPrompt = skills.length > 0 ? generateSkillPrompt(skills) : '';
+
     const prompt = `
 You are an expert AI Planner.
 Your goal is to break down the user's request into a series of subtasks.
-The available agents are:
-- 'claude': Best for complex coding, refactoring, architecture.
-- 'codex': Best for simple code generation, unit tests.
-- 'gemini': Best for analysis, reading files, summarization.
-
+Do NOT assign agents to subtasks - the user will specify which executor to use.
+${skillPrompt}
 User Request: "${task.description}"
 
 Output Format (JSON only, no explanation):
@@ -37,8 +50,7 @@ Output Format (JSON only, no explanation):
   "subtasks": [
     {
       "title": "Short title of subtask",
-      "description": "Detailed description of what to do",
-      "agent": "claude|codex|gemini"
+      "description": "Detailed description of what to do"
     }
   ]
 }
@@ -116,7 +128,7 @@ Output Format (JSON only, no explanation):
     } catch (error: any) {
         log(`CLI execution failed: ${error.message}`);
         log(`Falling back to Mock Planner Logic.`);
-        return this.fallbackPlan(task, planId, contextDir, onOutput);
+        return this.fallbackPlan(task, planId, contextDir, executorAgent, onOutput);
     }
 
     let parsedPlan;
@@ -133,9 +145,10 @@ Output Format (JSON only, no explanation):
         // Support various field names that LLM might use
         const title = st.title || st.name || st.task?.slice(0, 50) || `Subtask ${index + 1}`;
         const description = st.description || st.task || st.instruction || st.details || '';
-        const agent = st.agent || 'claude';
+        // Use user-specified executor, do not auto-select
+        const agent = executorAgent as AgentType;
 
-        logger.info(`[Planner] Parsed subtask ${index + 1}: title="${title}", agent="${agent}"`);
+        logger.info(`[Planner] Parsed subtask ${index + 1}: title="${title}", executor="${agent}"`);
 
         return {
             id: randomUUID(),
@@ -159,15 +172,16 @@ Output Format (JSON only, no explanation):
     };
   }
 
-  private async fallbackPlan(task: Task, planId: string, contextDir: string, onOutput?: (chunk: string) => void): Promise<Plan> {
-      onOutput?.(`[Fallback] Generating static plan for prototype safety.\n`);
-      
+  private async fallbackPlan(task: Task, planId: string, contextDir: string, executorAgent: string, onOutput?: (chunk: string) => void): Promise<Plan> {
+      onOutput?.(`[Fallback] Generating static plan for prototype safety (executor: ${executorAgent}).\n`);
+
+      const agent = executorAgent as AgentType;
       const subtasks: Subtask[] = [
         {
             id: randomUUID(),
             title: `Analyze: ${task.description.slice(0, 20)}...`,
             description: `Analyze the user request: ${task.description}`,
-            agent: AgentType.GEMINI,
+            agent,
             priority: 1,
             inputContextFiles: [],
             outputFile: `.ai-al-gaib/contexts/${task.id}/results/1-analysis.md`,
@@ -178,7 +192,7 @@ Output Format (JSON only, no explanation):
             id: randomUUID(),
             title: `Execute: ${task.description.slice(0, 20)}...`,
             description: `Implement based on analysis: ${task.description}`,
-            agent: AgentType.CLAUDE,
+            agent,
             priority: 2,
             inputContextFiles: [`.ai-al-gaib/contexts/${task.id}/results/1-analysis.md`],
             outputFile: `.ai-al-gaib/contexts/${task.id}/results/2-result.md`,

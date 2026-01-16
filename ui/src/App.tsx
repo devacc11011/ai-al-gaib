@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Folder, FileText, Play, Terminal as TerminalIcon, CheckCircle2, Circle, Loader2, XCircle, ChevronRight, ChevronDown, ListTodo, ExternalLink } from 'lucide-react'
+import { Folder, FileText, Play, Terminal as TerminalIcon, CheckCircle2, Circle, Loader2, XCircle, ChevronRight, ChevronDown, ListTodo, ExternalLink, Zap, RefreshCw, Menu, Plus, X, Wand2 } from 'lucide-react'
 
 // Safe electron import
 const electron = window.require ? window.require('electron') : null;
@@ -29,6 +29,19 @@ interface Subtask {
 interface Plan {
   id: string;
   subtasks: Subtask[];
+}
+
+interface Skill {
+  name: string;
+  description: string;
+  agent: 'claude' | 'gemini' | 'codex';
+  path: string;
+}
+
+interface SkillsByAgent {
+  claude: Skill[];
+  gemini: Skill[];
+  codex: Skill[];
 }
 
 // --- Helper Functions ---
@@ -371,6 +384,234 @@ const ExecutorWindow = () => {
   );
 };
 
+const AVAILABLE_AGENTS = ['claude', 'codex', 'gemini'] as const;
+type AgentType = typeof AVAILABLE_AGENTS[number];
+
+// Skill Generator Modal
+interface SkillGeneratorModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  workspaceRoot: string;
+  onSkillCreated: () => void;
+}
+
+const SkillGeneratorModal = ({ isOpen, onClose, workspaceRoot, onSkillCreated }: SkillGeneratorModalProps) => {
+  const [skillName, setSkillName] = useState('');
+  const [skillDescription, setSkillDescription] = useState('');
+  const [targetAgent, setTargetAgent] = useState<AgentType>('claude');
+  const [generatorAgent, setGeneratorAgent] = useState<AgentType>('claude');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationLog, setGenerationLog] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [generationLog]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      // Reset state when modal closes
+      setSkillName('');
+      setSkillDescription('');
+      setGenerationLog([]);
+      setError(null);
+    }
+  }, [isOpen]);
+
+  const handleGenerate = async () => {
+    if (!skillName.trim() || !skillDescription.trim()) {
+      setError('Please provide both skill name and description');
+      return;
+    }
+
+    if (!ipcRenderer) {
+      setError('IPC not available');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+    setGenerationLog(['Starting skill generation...']);
+
+    try {
+      const result = await ipcRenderer.invoke('generate-skill', {
+        name: skillName.trim().toLowerCase().replace(/\s+/g, '-'),
+        description: skillDescription.trim(),
+        targetAgent,
+        generatorAgent,
+        workspaceRoot,
+      });
+
+      if (result.success) {
+        setGenerationLog(prev => [...prev, `✓ Skill created at: ${result.path}`]);
+        onSkillCreated();
+        setTimeout(() => {
+          onClose();
+        }, 1500);
+      } else {
+        setError(result.error || 'Failed to generate skill');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate skill');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!ipcRenderer || !isOpen) return;
+
+    const logHandler = (_: any, msg: string) => {
+      setGenerationLog(prev => [...prev, msg]);
+    };
+
+    ipcRenderer.on('skill-generation-log', logHandler);
+    return () => {
+      ipcRenderer.removeListener('skill-generation-log', logHandler);
+    };
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className="bg-card border border-border rounded-lg w-full max-w-2xl mx-4 shadow-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <div className="flex items-center gap-2">
+            <Wand2 className="w-5 h-5 text-purple-400" />
+            <h2 className="text-lg font-bold">Skill Generator</h2>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={isGenerating}
+            className="p-1 hover:bg-muted rounded disabled:opacity-50"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-4 space-y-4 overflow-auto flex-1">
+          {/* Skill Name */}
+          <div>
+            <label className="block text-sm font-medium mb-1">Skill Name</label>
+            <input
+              type="text"
+              value={skillName}
+              onChange={(e) => setSkillName(e.target.value)}
+              disabled={isGenerating}
+              placeholder="e.g., code-reviewer, test-generator"
+              className="w-full px-3 py-2 bg-muted border border-border rounded-md text-sm disabled:opacity-50"
+            />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              What should this skill do?
+            </label>
+            <textarea
+              value={skillDescription}
+              onChange={(e) => setSkillDescription(e.target.value)}
+              disabled={isGenerating}
+              placeholder="Describe what the skill should do, when it should be used, and any specific instructions..."
+              rows={4}
+              className="w-full px-3 py-2 bg-muted border border-border rounded-md text-sm disabled:opacity-50 resize-none"
+            />
+          </div>
+
+          {/* Agent Selection */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Target Agent</label>
+              <select
+                value={targetAgent}
+                onChange={(e) => setTargetAgent(e.target.value as AgentType)}
+                disabled={isGenerating}
+                className="w-full px-3 py-2 bg-muted border border-border rounded-md text-sm disabled:opacity-50"
+              >
+                {AVAILABLE_AGENTS.map(agent => (
+                  <option key={agent} value={agent}>{agent}</option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Which agent will use this skill
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Generator Agent</label>
+              <select
+                value={generatorAgent}
+                onChange={(e) => setGeneratorAgent(e.target.value as AgentType)}
+                disabled={isGenerating}
+                className="w-full px-3 py-2 bg-muted border border-border rounded-md text-sm disabled:opacity-50"
+              >
+                {AVAILABLE_AGENTS.map(agent => (
+                  <option key={agent} value={agent}>{agent}</option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Which agent will generate the skill
+              </p>
+            </div>
+          </div>
+
+          {/* Generation Log */}
+          {generationLog.length > 0 && (
+            <div className="bg-zinc-950 rounded-md p-3 max-h-40 overflow-auto">
+              <div className="text-xs font-mono space-y-1">
+                {generationLog.map((log, i) => (
+                  <div key={i} className={log.startsWith('✓') ? 'text-green-400' : 'text-zinc-400'}>
+                    {log}
+                  </div>
+                ))}
+                <div ref={logEndRef} />
+              </div>
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-md p-3 text-sm text-red-400">
+              {error}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-2 p-4 border-t border-border">
+          <button
+            onClick={onClose}
+            disabled={isGenerating}
+            className="px-4 py-2 text-sm rounded-md hover:bg-muted disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleGenerate}
+            disabled={isGenerating || !skillName.trim() || !skillDescription.trim()}
+            className="px-4 py-2 text-sm rounded-md bg-purple-600 hover:bg-purple-500 text-white disabled:opacity-50 flex items-center gap-2"
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <Wand2 className="w-4 h-4" />
+                Generate Skill
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 function MainApp() {
   const [cwd, setCwd] = useState<string>('')
   const [logs, setLogs] = useState<string[]>([
@@ -383,6 +624,13 @@ function MainApp() {
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
   const [currentPlan, setCurrentPlan] = useState<Plan | null>(null);
+  const [planner, setPlanner] = useState<AgentType>('claude');
+  const [executor, setExecutor] = useState<AgentType>('claude');
+  const [skills, setSkills] = useState<SkillsByAgent>({ claude: [], gemini: [], codex: [] });
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [loadingSkills, setLoadingSkills] = useState(false);
+  const [skillGeneratorOpen, setSkillGeneratorOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -396,7 +644,15 @@ function MainApp() {
     const contentHandler = (_: any, { content }: { content: string }) => setPreviewContent(content);
     const planHandler = (_: any, plan: Plan) => setCurrentPlan(plan);
     const refreshHandler = () => ipcRenderer.send('request-file-tree');
-    const workspaceHandler = (_: any, pathStr: string) => setCwd(pathStr);
+    const workspaceHandler = (_: any, pathStr: string) => {
+      setCwd(pathStr);
+      // Clear selected skills when workspace changes
+      setSelectedSkills([]);
+    };
+    const skillsHandler = (_: any, loadedSkills: SkillsByAgent) => {
+      setSkills(loadedSkills);
+      setLoadingSkills(false);
+    };
 
     ipcRenderer.on('log', logHandler);
     ipcRenderer.on('status-update', statusHandler);
@@ -405,11 +661,15 @@ function MainApp() {
     ipcRenderer.on('plan-created', planHandler);
     ipcRenderer.on('refresh-explorer', refreshHandler);
     ipcRenderer.on('workspace-root-changed', workspaceHandler);
+    ipcRenderer.on('skills-loaded', skillsHandler);
 
     ipcRenderer.send('request-file-tree');
     ipcRenderer.invoke('get-workspace-root').then((pathStr: string) => {
         if (pathStr) setCwd(pathStr);
     }).catch(() => {});
+
+    // Load skills on initial load
+    loadSkills();
 
     return () => {
       ipcRenderer.removeListener('log', logHandler);
@@ -419,12 +679,38 @@ function MainApp() {
       ipcRenderer.removeListener('plan-created', planHandler);
       ipcRenderer.removeListener('refresh-explorer', refreshHandler);
       ipcRenderer.removeListener('workspace-root-changed', workspaceHandler);
+      ipcRenderer.removeListener('skills-loaded', skillsHandler);
     };
   }, []);
 
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs])
+
+  const loadSkills = async () => {
+    if (!ipcRenderer) return;
+    setLoadingSkills(true);
+    try {
+      const loadedSkills = await ipcRenderer.invoke('load-skills');
+      setSkills(loadedSkills);
+    } catch (err) {
+      console.error('Failed to load skills:', err);
+    } finally {
+      setLoadingSkills(false);
+    }
+  };
+
+  const toggleSkill = (skillName: string) => {
+    setSelectedSkills(prev =>
+      prev.includes(skillName)
+        ? prev.filter(s => s !== skillName)
+        : [...prev, skillName]
+    );
+  };
+
+  const getAllSkills = (): Skill[] => {
+    return [...skills.claude, ...skills.gemini, ...skills.codex];
+  };
 
   const handleExecute = (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -438,12 +724,13 @@ function MainApp() {
     if (!input.trim()) return
 
     const cmd = input.trim()
-    setLogs(prev => [...prev, `$ ${cmd}`]);
+    const skillsLog = selectedSkills.length > 0 ? `, Skills: ${selectedSkills.join(', ')}` : '';
+    setLogs(prev => [...prev, `$ ${cmd}`, `[Config] Planner: ${planner}, Executor: ${executor}${skillsLog}`]);
     setInput('');
     setIsExecuting(true);
     setStatus({ planning: 'idle', execution: 'idle' });
     setCurrentPlan(null);
-    ipcRenderer.send('execute-task', { task: cmd, options: {} });
+    ipcRenderer.send('execute-task', { task: cmd, options: { planner, executor, skills: selectedSkills } });
   }
 
   const handleFileSelect = (path: string) => {
@@ -478,13 +765,61 @@ function MainApp() {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-background text-foreground overflow-hidden font-sans">
+      {/* Skill Generator Modal */}
+      <SkillGeneratorModal
+        isOpen={skillGeneratorOpen}
+        onClose={() => setSkillGeneratorOpen(false)}
+        workspaceRoot={cwd}
+        onSkillCreated={loadSkills}
+      />
+
       {/* Header */}
       <div className="h-14 border-b flex items-center px-4 justify-between bg-card shrink-0">
-        <div className="flex items-center gap-2">
-           <TerminalIcon className="w-5 h-5" />
-           <h1 className="font-bold text-lg">AI Al-Gaib</h1>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <TerminalIcon className="w-5 h-5" />
+            <h1 className="font-bold text-lg">AI Al-Gaib</h1>
+          </div>
+
+          {/* Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setMenuOpen(!menuOpen)}
+              className="flex items-center gap-1 px-2 py-1 text-sm hover:bg-muted rounded transition-colors"
+            >
+              <Menu className="w-4 h-4" />
+              <span>Menu</span>
+            </button>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                <div className="absolute left-0 top-full mt-1 bg-card border border-border rounded-md shadow-lg z-50 min-w-48">
+                  <button
+                    onClick={() => {
+                      setSkillGeneratorOpen(true);
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted transition-colors"
+                  >
+                    <Wand2 className="w-4 h-4 text-purple-400" />
+                    Generate Skill
+                  </button>
+                  <button
+                    onClick={() => {
+                      loadSkills();
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted transition-colors"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Reload Skills
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
-        
+
         <div className="flex-1 max-w-xl mx-4">
           <div className="flex items-center border rounded-md px-3 py-1.5 bg-muted/50 text-sm gap-2">
             <Folder className="w-4 h-4 mr-2 text-muted-foreground" />
@@ -507,18 +842,39 @@ function MainApp() {
             <div className="flex items-center gap-2">
                 <StatusIcon state={status.planning} />
                 <span className={status.planning === 'running' ? 'text-blue-400' : 'text-muted-foreground'}>Planner</span>
+                <select
+                  value={planner}
+                  onChange={(e) => setPlanner(e.target.value as AgentType)}
+                  disabled={isExecuting}
+                  className="bg-muted border border-border rounded px-2 py-0.5 text-xs font-mono disabled:opacity-50"
+                >
+                  {AVAILABLE_AGENTS.map(agent => (
+                    <option key={agent} value={agent}>{agent}</option>
+                  ))}
+                </select>
             </div>
             <div className="w-px h-4 bg-border"></div>
             <div className="flex items-center gap-2">
                 <StatusIcon state={status.execution} />
                 <span className={status.execution === 'running' ? 'text-blue-400' : 'text-muted-foreground'}>Executor</span>
+                <select
+                  value={executor}
+                  onChange={(e) => setExecutor(e.target.value as AgentType)}
+                  disabled={isExecuting}
+                  className="bg-muted border border-border rounded px-2 py-0.5 text-xs font-mono disabled:opacity-50"
+                >
+                  {AVAILABLE_AGENTS.map(agent => (
+                    <option key={agent} value={agent}>{agent}</option>
+                  ))}
+                </select>
             </div>
         </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Left: Explorer */}
+        {/* Left: Explorer + Skills */}
         <div className="w-64 border-r bg-muted/10 flex flex-col shrink-0">
+          {/* Explorer Section */}
           <div className="p-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider flex flex-col gap-1">
             <div className="flex justify-between items-center">
               <span>Explorer</span>
@@ -530,7 +886,7 @@ function MainApp() {
               {cwd || 'Select a folder to browse'}
             </div>
           </div>
-          <div className="flex-1 p-2 overflow-auto">
+          <div className="flex-1 p-2 overflow-auto min-h-0">
              {fileTree ? (
                  <FileTreeItem node={fileTree} onSelect={handleFileSelect} />
              ) : (
@@ -539,6 +895,75 @@ function MainApp() {
                     Scanning...
                  </div>
              )}
+          </div>
+
+          {/* Skills Section */}
+          <div className="border-t border-border">
+            <div className="p-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider flex justify-between items-center">
+              <div className="flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-yellow-500" />
+                <span>Skills</span>
+              </div>
+              <button
+                onClick={loadSkills}
+                disabled={loadingSkills}
+                className="p-1 hover:bg-muted rounded disabled:opacity-50"
+                title="Reload skills"
+              >
+                <RefreshCw className={`w-3 h-3 ${loadingSkills ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+            <div className="px-2 pb-3 max-h-40 overflow-auto">
+              {loadingSkills ? (
+                <div className="text-center text-xs text-muted-foreground py-2 flex items-center justify-center gap-2">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Loading...
+                </div>
+              ) : getAllSkills().length === 0 ? (
+                <div className="text-center text-xs text-muted-foreground py-2">
+                  No skills found
+                  <div className="text-[10px] mt-1 opacity-60">
+                    Add skills to .claude/skills/, .gemini/skills/, or .codex/skills/
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {getAllSkills().map(skill => (
+                    <label
+                      key={`${skill.agent}-${skill.name}`}
+                      className={`flex items-start gap-2 p-1.5 rounded cursor-pointer hover:bg-muted/50 transition-colors ${
+                        selectedSkills.includes(skill.name) ? 'bg-primary/10' : ''
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedSkills.includes(skill.name)}
+                        onChange={() => toggleSkill(skill.name)}
+                        disabled={isExecuting}
+                        className="mt-0.5 rounded border-border"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-medium truncate">{skill.name}</span>
+                          <span className={`text-[10px] px-1 rounded ${
+                            skill.agent === 'claude' ? 'bg-orange-500/20 text-orange-400' :
+                            skill.agent === 'gemini' ? 'bg-blue-500/20 text-blue-400' :
+                            'bg-green-500/20 text-green-400'
+                          }`}>
+                            {skill.agent}
+                          </span>
+                        </div>
+                        {skill.description && (
+                          <div className="text-[10px] text-muted-foreground truncate mt-0.5">
+                            {skill.description}
+                          </div>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain, WebContents, dialog } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Orchestrator } from '../orchestrator/Orchestrator.js';
+import { SkillLoader, Skill, SkillsByAgent } from '../skills/SkillLoader.js';
+import { SkillGenerator, SkillGenerationRequest } from '../skills/SkillGenerator.js';
 import chokidar, { FSWatcher } from 'chokidar';
 import fs from 'fs';
 import { logger } from '../utils/logger.js';
@@ -18,6 +20,9 @@ const orchestrator = new Orchestrator();
 
 let workspaceRoot = path.resolve(__dirname, '../../../');
 orchestrator.setWorkspaceRoot(workspaceRoot);
+
+const skillLoader = new SkillLoader(workspaceRoot);
+const skillGenerator = new SkillGenerator();
 
 // Store pending permission callback
 let pendingPermissionRespond: ((allow: boolean) => void) | null = null;
@@ -195,12 +200,22 @@ ipcMain.handle('set-workspace-root', async (event, newRoot: string) => {
 
   workspaceRoot = path.resolve(newRoot);
   orchestrator.setWorkspaceRoot(workspaceRoot);
+  skillLoader.setWorkspaceRoot(workspaceRoot);
   ensureAIContextDir();
   if (mainWindow) {
     setupFileWatcher(mainWindow);
   }
   event.sender.send('workspace-root-changed', workspaceRoot);
   sendFileTreeUpdate(event.sender);
+
+  // Load and send skills for the new workspace
+  try {
+    const skills = await skillLoader.loadAllSkills();
+    event.sender.send('skills-loaded', skills);
+  } catch (err: any) {
+    logger.error(`Failed to load skills: ${err.message}`);
+  }
+
   return workspaceRoot;
 });
 
@@ -228,17 +243,34 @@ ipcMain.on('read-file', (event, filePath) => {
 
 ipcMain.on('execute-task', async (event, { task, options }) => {
   const sender = event.sender;
-  logger.info(`[IPC] Received task: ${task}`);
+  const selectedSkills = options?.skills || [];
+  logger.info(`[IPC] Received task: ${task}, planner: ${options?.planner}, executor: ${options?.executor}, skills: ${selectedSkills.length}`);
 
   // Open Planner Window on task start
   createPlannerWindow();
 
+  // Load skill contents for selected skills
+  let skillContents: Skill[] = [];
+  if (selectedSkills.length > 0) {
+    for (const skillName of selectedSkills) {
+      const skill = await skillLoader.getSkillByName(skillName);
+      if (skill) {
+        skillContents.push(skill);
+      }
+    }
+    logger.info(`[IPC] Loaded ${skillContents.length} skill contents`);
+  }
+
   try {
     sender.send('log', `[System] Received task: "${task}"`);
+    sender.send('log', `[System] Planner: ${options?.planner || 'claude'}, Executor: ${options?.executor || 'claude'}`);
+    if (skillContents.length > 0) {
+      sender.send('log', `[System] Active Skills: ${skillContents.map(s => s.name).join(', ')}`);
+    }
     sender.send('status-update', { phase: 'planning', status: 'running' });
 
     // Use runFullFlow with callbacks to stream updates to UI
-    await orchestrator.runFullFlow(task, { planner: options?.planner }, {
+    await orchestrator.runFullFlow(task, { planner: options?.planner, executor: options?.executor, skills: skillContents }, {
       onLog: (msg) => {
         sender.send('log', msg);
         // Also send to executor window
@@ -319,4 +351,49 @@ ipcMain.on('permission-respond', (event, { allow }: { allow: boolean }) => {
         pendingPermissionRespond(allow);
         pendingPermissionRespond = null;
     }
+});
+
+// --- Skill IPC Handlers ---
+
+ipcMain.handle('load-skills', async () => {
+  try {
+    skillLoader.clearCache();
+    const skills = await skillLoader.loadAllSkills();
+    logger.info(`[IPC] Loaded skills: claude=${skills.claude.length}, gemini=${skills.gemini.length}, codex=${skills.codex.length}`);
+    return skills;
+  } catch (err: any) {
+    logger.error(`[IPC] Failed to load skills: ${err.message}`);
+    return { claude: [], gemini: [], codex: [] };
+  }
+});
+
+ipcMain.handle('get-skill-content', async (event, skillName: string) => {
+  try {
+    const skill = await skillLoader.getSkillByName(skillName);
+    return skill || null;
+  } catch (err: any) {
+    logger.error(`[IPC] Failed to get skill content: ${err.message}`);
+    return null;
+  }
+});
+
+ipcMain.handle('generate-skill', async (event, request: SkillGenerationRequest) => {
+  logger.info(`[IPC] Generate skill request: ${request.name} for ${request.targetAgent}`);
+
+  try {
+    const result = await skillGenerator.generate(request, (msg) => {
+      // Send log updates to the UI
+      event.sender.send('skill-generation-log', msg);
+    });
+
+    if (result.success) {
+      // Clear skill cache so the new skill appears
+      skillLoader.clearCache();
+    }
+
+    return result;
+  } catch (err: any) {
+    logger.error(`[IPC] Skill generation failed: ${err.message}`);
+    return { success: false, error: err.message };
+  }
 });

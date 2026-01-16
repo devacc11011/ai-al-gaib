@@ -24,16 +24,18 @@ program
   .command('plan')
   .description('Plan a task using AI agents')
   .argument('<task>', 'The task description')
-  .option('-p, --planner <agent>', 'Specify the planner agent (claude, codex, gemini)')
+  .option('-p, --planner <agent>', 'Specify the planner agent (claude, codex, gemini)', 'claude')
+  .option('-e, --executor <agent>', 'Specify the executor agent (claude, codex, gemini)', 'claude')
   .option('-r, --run', 'Immediately execute the plan after creation')
   .action(async (task, options) => {
     try {
+      console.log(chalk.gray(`Planner: ${options.planner}, Executor: ${options.executor}`));
       if (options.run) {
         console.log(chalk.cyan('Planning and Executing task:'), task);
-        await orchestrator.runFullFlow(task, { planner: options.planner });
+        await orchestrator.runFullFlow(task, { planner: options.planner, executor: options.executor });
       } else {
         console.log(chalk.cyan('Planning task:'), task);
-        await orchestrator.planTask(task, { planner: options.planner });
+        await orchestrator.planTask(task, { planner: options.planner, executor: options.executor });
         console.log(chalk.yellow('\nTip: Use --run to execute immediately.'));
       }
     } catch (error: any) {

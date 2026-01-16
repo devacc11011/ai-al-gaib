@@ -2,6 +2,7 @@ import { Task, TaskType, TaskPriority } from '../types/task.js';
 import { Planner } from '../planner/Planner.js';
 import { ClaudeCodeAdapter } from '../agents/claude/ClaudeCodeAdapter.js';
 import { AgentType } from '../types/agent.js';
+import { Skill, generateSkillPrompt } from '../skills/SkillLoader.js';
 import chalk from 'chalk';
 import path from 'path';
 
@@ -45,7 +46,7 @@ export class Orchestrator {
     return this.workspaceRoot;
   }
 
-  async planTask(description: string, options: { planner?: string }): Promise<any> {
+  async planTask(description: string, options: { planner?: string; executor?: string; skills?: Skill[] }): Promise<any> {
     const task: Task = {
       id: `task-${Date.now()}`,
       type: TaskType.CODE_GENERATION,
@@ -54,7 +55,12 @@ export class Orchestrator {
       createdAt: new Date()
     };
 
-    const plan = await this.planner.createPlan(task, options.planner);
+    const plan = await this.planner.createPlan(task, {
+      plannerAgent: options.planner,
+      executorAgent: options.executor,
+      skills: options.skills,
+      workspaceRoot: this.workspaceRoot
+    });
     return plan;
   }
 
@@ -71,8 +77,8 @@ export class Orchestrator {
   }
 
   async runFullFlow(
-    description: string, 
-    options: { planner?: string },
+    description: string,
+    options: { planner?: string; executor?: string; skills?: Skill[] },
     callbacks?: ExecutionCallbacks
   ): Promise<void> {
     this.abortController = new AbortController();
@@ -96,9 +102,19 @@ export class Orchestrator {
 
             // 1. Plan
             log(`[Orchestrator] Planning task: "${description}" in ${this.workspaceRoot}...`);
-            const plan = await this.planner.createPlan(task, options.planner, (chunk) => {
-                callbacks?.onPlannerOutput?.(chunk);
-            }, this.workspaceRoot);
+            log(`[Orchestrator] Planner: ${options.planner || 'claude'}, Executor: ${options.executor || 'claude'}`);
+            if (options.skills && options.skills.length > 0) {
+                log(`[Orchestrator] Active Skills: ${options.skills.map(s => s.name).join(', ')}`);
+            }
+            const plan = await this.planner.createPlan(task, {
+                plannerAgent: options.planner,
+                executorAgent: options.executor,
+                skills: options.skills,
+                onOutput: (chunk) => {
+                    callbacks?.onPlannerOutput?.(chunk);
+                },
+                workspaceRoot: this.workspaceRoot
+            });
             
             if (signal.aborted) throw new Error('Cancelled');        
         log(`[Orchestrator] Plan created with ${plan.subtasks.length} subtasks.`);
