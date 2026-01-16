@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+ui/node_modules/
+
+# Build outputs
+dist/
+ui/dist/
+release/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Temp files
+*.tmp
+/tmp/
+
+# AI context (local only)
+.ai-al-gaib/
+
+# Test outputs
+coverage/
+test-next-*/
