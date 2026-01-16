@@ -2,6 +2,8 @@
 
 <span style="color: red; font-weight: bold;">⚠️ 이 프로젝트는 코드 한 줄도 직접 검증하지 않은 바이브 코딩 결과물입니다. 실제 사용 시 반드시 <code>logs/cli.log</code>와 <code>logs/agent-results.log</code>를 확인하여 어떤 명령과 에이전트 출력이 실행·저장되었는지 검증하십시오.</span>
 
+<span style="color: red; font-weight: bold;">💸 개발자 계정(Apple Developer 등)을 구매할 예산이 없어 서명/ notarization 을 하지 못했습니다. macOS에서는 미확인 개발자 경고가 뜨므로, 소스에서 직접 빌드하여 실행하거나 보안 우회를 스스로 처리해야 합니다.</span>
+
 ![img.png](img.png)
 
 > Multi-Agent AI Orchestration System - Claude, Gemini, Codex를 하나의 인터페이스에서 통합 관리
