@@ -145,32 +145,211 @@ const PlannerWindow = () => {
   );
 };
 
+interface PermissionRequest {
+  id: string;
+  type: 'file_write' | 'file_edit' | 'bash' | 'unknown';
+  description: string;
+  rawText: string;
+}
+
+type ExecutionPhase = 'idle' | 'planning' | 'executing' | 'completed' | 'failed';
+
 const ExecutorWindow = () => {
   const [logs, setLogs] = useState<string[]>([]);
+  const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
+  const [phase, setPhase] = useState<ExecutionPhase>('idle');
+  const [currentSubtask, setCurrentSubtask] = useState<string>('');
+  const [progress, setProgress] = useState({ current: 0, total: 0 });
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!ipcRenderer) return;
-    const handler = (_: any, msg: string) => {
+
+    const logHandler = (_: any, msg: string) => {
       setLogs(prev => [...prev, msg]);
+
+      // Update phase based on log messages
+      if (msg.includes('[Planner]') || msg.includes('Planning task')) {
+        setPhase('planning');
+      } else if (msg.includes('[Plan]')) {
+        const match = msg.match(/(\d+) subtasks/);
+        if (match) setProgress({ current: 0, total: parseInt(match[1]) });
+      } else if (msg.startsWith('▶ Starting:')) {
+        setPhase('executing');
+        setCurrentSubtask(msg.replace('▶ Starting:', '').trim());
+        setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+      } else if (msg.includes('All tasks completed')) {
+        setPhase('completed');
+      } else if (msg.startsWith('✗') || msg.includes('[Failed]')) {
+        setPhase('failed');
+      }
     };
-    ipcRenderer.on('executor-log', handler);
-    return () => { ipcRenderer.removeListener('executor-log', handler); };
+
+    const permissionHandler = (_: any, request: PermissionRequest) => {
+      setPermissionRequest(request);
+    };
+
+    ipcRenderer.on('executor-log', logHandler);
+    ipcRenderer.on('permission-request', permissionHandler);
+
+    return () => {
+      ipcRenderer.removeListener('executor-log', logHandler);
+      ipcRenderer.removeListener('permission-request', permissionHandler);
+    };
   }, []);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
+  const handlePermissionResponse = (allow: boolean) => {
+    if (ipcRenderer) {
+      ipcRenderer.send('permission-respond', { allow });
+    }
+    setPermissionRequest(null);
+  };
+
+  const getPermissionIcon = (type: string) => {
+    switch (type) {
+      case 'file_write': return '📝';
+      case 'file_edit': return '✏️';
+      case 'bash': return '⚡';
+      default: return '⚠️';
+    }
+  };
+
+  const getPermissionTitle = (type: string) => {
+    switch (type) {
+      case 'file_write': return 'File Write Request';
+      case 'file_edit': return 'File Edit Request';
+      case 'bash': return 'Command Execution Request';
+      default: return 'Permission Request';
+    }
+  };
+
+  const phases: { key: ExecutionPhase; label: string }[] = [
+    { key: 'planning', label: 'Planning' },
+    { key: 'executing', label: 'Executing' },
+    { key: 'completed', label: 'Done' }
+  ];
+
+  const getPhaseIndex = () => {
+    if (phase === 'idle') return -1;
+    if (phase === 'planning') return 0;
+    if (phase === 'executing') return 1;
+    if (phase === 'completed' || phase === 'failed') return 2;
+    return -1;
+  };
+
   return (
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 font-mono text-sm">
+      {/* Header */}
       <div className="p-3 border-b border-zinc-800 bg-zinc-900 flex justify-between items-center">
         <span className="font-bold flex items-center gap-2">
           <Play className="w-4 h-4 text-green-400" />
-          Executor Output
+          Executor
         </span>
-        <span className="text-xs text-zinc-500">Live Stream</span>
+        <span className="text-xs text-zinc-500">
+          {progress.total > 0 && `${progress.current}/${progress.total} subtasks`}
+        </span>
       </div>
+
+      {/* Phase Indicator */}
+      <div className="px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
+        <div className="flex items-center justify-center gap-2">
+          {phases.map((p, idx) => {
+            const currentIdx = getPhaseIndex();
+            const isActive = idx === currentIdx;
+            const isCompleted = idx < currentIdx;
+            const isFailed = phase === 'failed' && idx === currentIdx;
+
+            return (
+              <div key={p.key} className="flex items-center">
+                {/* Step circle */}
+                <div className={`
+                  w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold
+                  ${isFailed ? 'bg-red-500 text-white' :
+                    isCompleted ? 'bg-green-500 text-white' :
+                    isActive ? 'bg-blue-500 text-white animate-pulse' :
+                    'bg-zinc-700 text-zinc-400'}
+                `}>
+                  {isCompleted ? (
+                    <CheckCircle2 className="w-4 h-4" />
+                  ) : isFailed ? (
+                    <XCircle className="w-4 h-4" />
+                  ) : isActive ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    idx + 1
+                  )}
+                </div>
+
+                {/* Label */}
+                <span className={`ml-2 text-sm ${isActive ? 'text-white font-medium' : 'text-zinc-500'}`}>
+                  {p.label}
+                </span>
+
+                {/* Connector line */}
+                {idx < phases.length - 1 && (
+                  <div className={`w-12 h-0.5 mx-3 ${isCompleted ? 'bg-green-500' : 'bg-zinc-700'}`} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Current subtask */}
+        {currentSubtask && phase === 'executing' && (
+          <div className="mt-2 text-center text-xs text-zinc-400">
+            Current: <span className="text-blue-400">{currentSubtask}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Permission Request Dialog */}
+      {permissionRequest && (
+        <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 max-w-lg w-full mx-4 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-3xl">{getPermissionIcon(permissionRequest.type)}</span>
+              <div>
+                <h3 className="text-lg font-bold text-yellow-400">
+                  {getPermissionTitle(permissionRequest.type)}
+                </h3>
+                <p className="text-xs text-zinc-500">Claude is requesting permission</p>
+              </div>
+            </div>
+
+            <div className="bg-zinc-950 rounded p-3 mb-4 border border-zinc-800">
+              <p className="text-sm text-zinc-300 break-all">
+                {permissionRequest.description}
+              </p>
+            </div>
+
+            <div className="bg-zinc-950/50 rounded p-2 mb-4 max-h-32 overflow-auto border border-zinc-800">
+              <p className="text-xs text-zinc-500 whitespace-pre-wrap break-all">
+                {permissionRequest.rawText.slice(-300)}
+              </p>
+            </div>
+
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => handlePermissionResponse(false)}
+                className="px-4 py-2 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-sm font-medium transition-colors"
+              >
+                Deny
+              </button>
+              <button
+                onClick={() => handlePermissionResponse(true)}
+                className="px-4 py-2 rounded bg-green-600 hover:bg-green-500 text-white text-sm font-medium transition-colors"
+              >
+                Allow
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 overflow-auto p-4 space-y-1">
         {logs.length === 0 && <div className="text-zinc-600 italic">Waiting for executor output...</div>}
         {logs.map((log, i) => {
@@ -340,9 +519,16 @@ function MainApp() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Explorer */}
         <div className="w-64 border-r bg-muted/10 flex flex-col shrink-0">
-          <div className="p-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider flex justify-between items-center">
-            <span>Explorer</span>
-            <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground">.ai-al-gaib</span>
+          <div className="p-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider flex flex-col gap-1">
+            <div className="flex justify-between items-center">
+              <span>Explorer</span>
+              <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
+                {cwd ? cwd.split('/').pop() : 'No folder'}
+              </span>
+            </div>
+            <div className="text-[10px] text-muted-foreground/60 truncate font-normal normal-case">
+              {cwd || 'Select a folder to browse'}
+            </div>
           </div>
           <div className="flex-1 p-2 overflow-auto">
              {fileTree ? (

@@ -5,27 +5,44 @@ import { AgentType } from '../types/agent.js';
 import chalk from 'chalk';
 import path from 'path';
 
+export interface PermissionRequest {
+  id: string;
+  type: 'file_write' | 'file_edit' | 'bash' | 'unknown';
+  description: string;
+  rawText: string;
+}
+
 export interface ExecutionCallbacks {
   onLog?: (message: string) => void;
-  onPlanCreated?: (plan: any) => void; 
-  onPlannerOutput?: (chunk: string) => void; // New callback
+  onPlanCreated?: (plan: any) => void;
+  onPlannerOutput?: (chunk: string) => void;
   onSubtaskStart?: (subtaskId: string, title: string) => void;
   onSubtaskComplete?: (subtaskId: string, result: any) => void;
   onSubtaskFail?: (subtaskId: string, error: string) => void;
+  onPermissionRequest?: (request: PermissionRequest, respond: (allow: boolean) => void) => void;
 }
 export class Orchestrator {
   private planner: Planner;
   private agents: Map<AgentType, any>;
   private abortController: AbortController | null = null;
+  private workspaceRoot: string = process.cwd();
 
   constructor() {
     this.planner = new Planner();
     this.agents = new Map();
-    
+
     // Register Agents
     this.agents.set(AgentType.CLAUDE, new ClaudeCodeAdapter());
     this.agents.set(AgentType.CODEX, new ClaudeCodeAdapter());
     this.agents.set(AgentType.GEMINI, new ClaudeCodeAdapter());
+  }
+
+  setWorkspaceRoot(root: string) {
+    this.workspaceRoot = root;
+  }
+
+  getWorkspaceRoot(): string {
+    return this.workspaceRoot;
   }
 
   async planTask(description: string, options: { planner?: string }): Promise<any> {
@@ -78,10 +95,10 @@ export class Orchestrator {
         if (signal.aborted) throw new Error('Cancelled');
 
             // 1. Plan
-            log(`[Orchestrator] Planning task: "${description}"...`);
+            log(`[Orchestrator] Planning task: "${description}" in ${this.workspaceRoot}...`);
             const plan = await this.planner.createPlan(task, options.planner, (chunk) => {
                 callbacks?.onPlannerOutput?.(chunk);
-            });
+            }, this.workspaceRoot);
             
             if (signal.aborted) throw new Error('Cancelled');        
         log(`[Orchestrator] Plan created with ${plan.subtasks.length} subtasks.`);
@@ -116,9 +133,13 @@ export class Orchestrator {
                     subtaskId: subtask.id,
                     taskDescription: subtask.description,
                     contextFiles: subtask.inputContextFiles,
-                    outputFile: path.resolve(process.cwd(), subtask.outputFile),
+                    outputFile: path.resolve(this.workspaceRoot, subtask.outputFile),
+                    workspaceRoot: this.workspaceRoot,
                     onOutput: (chunk: string) => {
                         callbacks?.onLog?.(chunk.trimEnd());
+                    },
+                    onPermissionRequest: (request: PermissionRequest, respond: (allow: boolean) => void) => {
+                        callbacks?.onPermissionRequest?.(request, respond);
                     },
                     abortSignal: signal
                 });

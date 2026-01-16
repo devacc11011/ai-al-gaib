@@ -9,15 +9,16 @@ import { execa } from 'execa';
 import { logger } from '../utils/logger.js';
 
 export class Planner {
-  async createPlan(task: Task, plannerAgent: string = 'claude', onOutput?: (chunk: string) => void): Promise<Plan> {
+  async createPlan(task: Task, plannerAgent: string = 'claude', onOutput?: (chunk: string) => void, workspaceRoot?: string): Promise<Plan> {
+    const cwd = workspaceRoot || process.cwd();
     const log = (msg: string) => {
         onOutput?.(`[Planner] ${msg}\n`);
         logger.info(`[Planner] ${msg}`);
     };
-    log(`Generating plan using ${plannerAgent}...`);
-    
+    log(`Generating plan using ${plannerAgent} in ${cwd}...`);
+
     const planId = `plan-${Date.now()}`;
-    const contextDir = path.resolve(process.cwd(), `.ai-al-gaib/contexts/${task.id}`);
+    const contextDir = path.resolve(cwd, `.ai-al-gaib/contexts/${task.id}`);
     await fs.ensureDir(contextDir);
 
     const prompt = `
@@ -60,6 +61,7 @@ Output Format (JSON only, no explanation):
             rawOutput = await new Promise<string>((resolve, reject) => {
                 const child = spawn('claude', ['-p', '-', '--dangerously-skip-permissions'], {
                     stdio: ['pipe', 'pipe', 'pipe'],
+                    cwd: cwd,
                     env: { ...process.env, PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin` }
                 });
 

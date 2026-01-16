@@ -17,6 +17,10 @@ let executorWindow: BrowserWindow | null = null;
 const orchestrator = new Orchestrator();
 
 let workspaceRoot = path.resolve(__dirname, '../../../');
+orchestrator.setWorkspaceRoot(workspaceRoot);
+
+// Store pending permission callback
+let pendingPermissionRespond: ((allow: boolean) => void) | null = null;
 let contextWatcher: FSWatcher | null = null;
 
 const getAIContextDir = () => path.join(workspaceRoot, '.ai-al-gaib');
@@ -115,26 +119,43 @@ app.on('activate', () => {
 });
 
 // Helper to build file tree
-const buildFileTree = (dir: string): any => {
+const buildFileTree = (dir: string, depth: number = 0, maxDepth: number = 4): any => {
   const name = path.basename(dir);
-  const stats = fs.statSync(dir);
-  
-  if (!stats.isDirectory()) {
+
+  try {
+    const stats = fs.statSync(dir);
+
+    if (!stats.isDirectory()) {
+      return { name, path: dir, type: 'file' };
+    }
+
+    // Limit depth to prevent huge trees
+    if (depth >= maxDepth) {
+      return { name, path: dir, type: 'folder', children: [] };
+    }
+
+    const children = fs.readdirSync(dir)
+      .filter(file => {
+        // Hide dotfiles, node_modules, etc.
+        if (file.startsWith('.')) return false;
+        if (file === 'node_modules') return false;
+        if (file === 'dist') return false;
+        if (file === '__pycache__') return false;
+        return true;
+      })
+      .slice(0, 50) // Limit number of children
+      .map(child => buildFileTree(path.join(dir, child), depth + 1, maxDepth));
+
+    return { name, path: dir, type: 'folder', children };
+  } catch (err) {
     return { name, path: dir, type: 'file' };
   }
-  
-  const children = fs.readdirSync(dir)
-    .filter(file => !file.startsWith('.')) // Hide dotfiles
-    .map(child => buildFileTree(path.join(dir, child)));
-    
-  return { name, path: dir, type: 'folder', children };
 };
 
 const sendFileTreeUpdate = (target: WebContents) => {
   try {
-    const dir = ensureAIContextDir();
-    if (fs.existsSync(dir)) {
-      const tree = buildFileTree(dir);
+    if (fs.existsSync(workspaceRoot)) {
+      const tree = buildFileTree(workspaceRoot);
       target.send('file-tree-update', tree);
     }
   } catch (err) {
@@ -171,8 +192,9 @@ ipcMain.handle('get-workspace-root', () => workspaceRoot);
 
 ipcMain.handle('set-workspace-root', async (event, newRoot: string) => {
   if (!newRoot) return workspaceRoot;
-  
+
   workspaceRoot = path.resolve(newRoot);
+  orchestrator.setWorkspaceRoot(workspaceRoot);
   ensureAIContextDir();
   if (mainWindow) {
     setupFileWatcher(mainWindow);
@@ -257,6 +279,18 @@ ipcMain.on('execute-task', async (event, { task, options }) => {
         if (executorWindow && !executorWindow.isDestroyed()) {
           executorWindow.webContents.send('executor-log', `✗ Failed: ${error}`);
         }
+      },
+      onPermissionRequest: (request, respond) => {
+        logger.info(`[IPC] Permission request: ${request.type} - ${request.description}`);
+        // Send to executor window
+        if (executorWindow && !executorWindow.isDestroyed()) {
+          executorWindow.webContents.send('permission-request', request);
+        }
+        // Also send to main window
+        sender.send('permission-request', request);
+
+        // Store the respond callback for later
+        pendingPermissionRespond = respond;
       }
     });
 
@@ -276,4 +310,13 @@ ipcMain.on('execute-task', async (event, { task, options }) => {
 
 ipcMain.on('cancel-task', () => {
     orchestrator.cancel();
+});
+
+// Handle permission response from UI
+ipcMain.on('permission-respond', (event, { allow }: { allow: boolean }) => {
+    logger.info(`[IPC] Permission response: ${allow ? 'ALLOW' : 'DENY'}`);
+    if (pendingPermissionRespond) {
+        pendingPermissionRespond(allow);
+        pendingPermissionRespond = null;
+    }
 });
