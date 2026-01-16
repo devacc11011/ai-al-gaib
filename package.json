@@ -2,6 +2,7 @@
   "name": "ai-al-gaib",
   "version": "0.1.0",
   "description": "Multi-Agent AI Orchestration System",
+  "author": "devacc11011 <devacc11011@users.noreply.github.com>",
   "main": "dist/electron/main.js",
   "bin": {
     "ai-al-gaib": "./dist/cli/index.js"
@@ -58,7 +59,8 @@
       "target": [
         "AppImage",
         "deb"
-      ]
+      ],
+      "maintainer": "devacc11011 <devacc11011@users.noreply.github.com>"
     },
     "publish": {
       "provider": "github",
