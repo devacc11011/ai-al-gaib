@@ -61,7 +61,7 @@ jobs:
             release/*.deb
             release/*.rpm
             release/*.tar.gz
-            release/*.yml
+            release/latest*.yml
             release/*.json
           retention-days: 5
 
@@ -89,7 +89,7 @@ jobs:
             artifacts/**/*.deb
             artifacts/**/*.rpm
             artifacts/**/*.tar.gz
-            artifacts/**/*.yml
+            artifacts/**/latest*.yml
             artifacts/**/*.json
           draft: false
           prerelease: false
