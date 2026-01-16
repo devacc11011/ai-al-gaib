@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { Orchestrator } from '../orchestrator/Orchestrator.js';
 import chokidar, { FSWatcher } from 'chokidar';
 import fs from 'fs';
+import { logger } from '../utils/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,6 +12,8 @@ const __dirname = path.dirname(__filename);
 const isDev = !app.isPackaged || process.env.NODE_ENV === 'development';
 
 let mainWindow: BrowserWindow | null = null;
+let plannerWindow: BrowserWindow | null = null;
+let executorWindow: BrowserWindow | null = null;
 const orchestrator = new Orchestrator();
 
 let workspaceRoot = path.resolve(__dirname, '../../../');
@@ -32,8 +35,8 @@ function createWindow() {
     height: 800,
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false, // Allowing direct IPC usage for prototype
-      webSecurity: false // Allowing local file access for preview
+      contextIsolation: false,
+      webSecurity: false
     },
   });
 
@@ -44,6 +47,56 @@ function createWindow() {
   } else {
     const indexPath = path.join(__dirname, '../../ui/dist/index.html');
     mainWindow.loadFile(indexPath);
+  }
+}
+
+function createPlannerWindow() {
+  if (plannerWindow && !plannerWindow.isDestroyed()) {
+    plannerWindow.focus();
+    return;
+  }
+
+  plannerWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    title: 'Planner Output (Headless)',
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+    autoHideMenuBar: true
+  });
+
+  if (isDev) {
+    plannerWindow.loadURL('http://localhost:5173?mode=planner');
+  } else {
+    const indexPath = path.join(__dirname, '../../ui/dist/index.html');
+    plannerWindow.loadURL(`file://${indexPath}?mode=planner`);
+  }
+}
+
+function createExecutorWindow() {
+  if (executorWindow && !executorWindow.isDestroyed()) {
+    executorWindow.focus();
+    return;
+  }
+
+  executorWindow = new BrowserWindow({
+    width: 900,
+    height: 700,
+    title: 'Executor Output',
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+    autoHideMenuBar: true
+  });
+
+  if (isDev) {
+    executorWindow.loadURL('http://localhost:5173?mode=executor');
+  } else {
+    const indexPath = path.join(__dirname, '../../ui/dist/index.html');
+    executorWindow.loadURL(`file://${indexPath}?mode=executor`);
   }
 }
 
@@ -153,31 +206,57 @@ ipcMain.on('read-file', (event, filePath) => {
 
 ipcMain.on('execute-task', async (event, { task, options }) => {
   const sender = event.sender;
-  let planCompleted = false;
-  
+  logger.info(`[IPC] Received task: ${task}`);
+
+  // Open Planner Window on task start
+  createPlannerWindow();
+
   try {
-    process.chdir(workspaceRoot);
     sender.send('log', `[System] Received task: "${task}"`);
     sender.send('status-update', { phase: 'planning', status: 'running' });
 
     // Use runFullFlow with callbacks to stream updates to UI
     await orchestrator.runFullFlow(task, { planner: options?.planner }, {
-      onLog: (msg) => sender.send('log', msg),
+      onLog: (msg) => {
+        sender.send('log', msg);
+        // Also send to executor window
+        if (executorWindow && !executorWindow.isDestroyed()) {
+          executorWindow.webContents.send('executor-log', msg);
+        }
+      },
       onPlanCreated: (plan) => {
-        planCompleted = true;
         sender.send('plan-created', plan);
-        sender.send('status-update', { phase: 'planning', status: 'completed' });
-        sender.send('status-update', { phase: 'execution', status: 'running' });
+        // Open executor window when plan is created and execution begins
+        createExecutorWindow();
+        if (executorWindow && !executorWindow.isDestroyed()) {
+          executorWindow.webContents.send('executor-log', `[Plan] ${plan.subtasks.length} subtasks to execute`);
+        }
+      },
+      onPlannerOutput: (chunk) => {
+        // Send to Planner Window if open
+        if (plannerWindow && !plannerWindow.isDestroyed()) {
+            plannerWindow.webContents.send('planner-log', chunk);
+        }
+        // Also log to main window for record
+        sender.send('log', chunk);
       },
       onSubtaskStart: (id, title) => {
         sender.send('log', `[Started] ${title}`);
-        // Could send specific event for progress bar
+        if (executorWindow && !executorWindow.isDestroyed()) {
+          executorWindow.webContents.send('executor-log', `\n▶ Starting: ${title}`);
+        }
       },
       onSubtaskComplete: (id, result) => {
         sender.send('log', `[Completed] Output: ${result.outputFile}`);
+        if (executorWindow && !executorWindow.isDestroyed()) {
+          executorWindow.webContents.send('executor-log', `✓ Completed (${result.executionTimeMs}ms)`);
+        }
       },
       onSubtaskFail: (id, error) => {
         sender.send('log', `[Failed] ${error}`);
+        if (executorWindow && !executorWindow.isDestroyed()) {
+          executorWindow.webContents.send('executor-log', `✗ Failed: ${error}`);
+        }
       }
     });
 
@@ -185,8 +264,16 @@ ipcMain.on('execute-task', async (event, { task, options }) => {
     sender.send('refresh-explorer'); // Tell UI to reload file list
 
   } catch (error: any) {
-    sender.send('log', `[Error] ${error.message}`);
-    sender.send('status-update', { phase: 'planning', status: planCompleted ? 'completed' : 'failed' });
-    sender.send('status-update', { phase: 'execution', status: 'failed' });
+    if (error.message === 'Cancelled') {
+         sender.send('status-update', { phase: 'execution', status: 'failed' });
+         // Already logged by Orchestrator
+    } else {
+        sender.send('log', `[Error] ${error.message}`);
+        sender.send('status-update', { phase: 'execution', status: 'failed' });
+    }
   }
+});
+
+ipcMain.on('cancel-task', () => {
+    orchestrator.cancel();
 });

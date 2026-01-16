@@ -5,6 +5,8 @@ export interface AgentExecutionRequest {
   taskDescription: string;
   contextFiles: string[];
   outputFile: string;
+  onOutput?: (chunk: string) => void; 
+  abortSignal?: AbortSignal; // For cancellation
 }
 
 export abstract class Agent {

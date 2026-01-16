@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
-import { Folder, FileText, Play, Terminal as TerminalIcon, CheckCircle2, Circle, Loader2, XCircle, ChevronRight, ChevronDown, ListTodo } from 'lucide-react'
+import { Folder, FileText, Play, Terminal as TerminalIcon, CheckCircle2, Circle, Loader2, XCircle, ChevronRight, ChevronDown, ListTodo, ExternalLink } from 'lucide-react'
 
 // Safe electron import
 const electron = window.require ? window.require('electron') : null;
 const ipcRenderer = electron ? electron.ipcRenderer : null;
 
+// --- Types ---
 interface StatusState {
   planning: 'idle' | 'running' | 'completed' | 'failed';
   execution: 'idle' | 'running' | 'completed' | 'failed';
@@ -29,6 +30,45 @@ interface Plan {
   id: string;
   subtasks: Subtask[];
 }
+
+// --- Helper Functions ---
+const highlightAgentCommands = (text: string) => {
+  // Regex to match patterns like: agent_name "command" or agent_name 'command'
+  // Supported agents: claude, codex, gemini, python, pip, etc.
+  const regex = /\b(claude|codex|gemini|python|python3|pip|npm|npx|git)\b\s+(['"])(.*?)\2/gi;
+  
+  if (!regex.test(text)) return text;
+
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  regex.lastIndex = 0;
+
+  while ((match = regex.exec(text)) !== null) {
+    // Add text before match
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+    
+    // Add highlighted match
+    parts.push(
+      <span key={match.index} className="text-yellow-400 font-bold">
+        {match[0]}
+      </span>
+    );
+    
+    lastIndex = regex.lastIndex;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return <span>{parts}</span>;
+};
+
+// --- Components ---
 
 const FileTreeItem = ({ node, onSelect }: { node: FileNode, onSelect: (path: string) => void }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -66,7 +106,93 @@ const FileTreeItem = ({ node, onSelect }: { node: FileNode, onSelect: (path: str
   );
 };
 
-function App() {
+const PlannerWindow = () => {
+  const [logs, setLogs] = useState<string[]>([]);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!ipcRenderer) return;
+    const handler = (_: any, msg: string) => {
+      setLogs(prev => [...prev, msg]);
+    };
+    ipcRenderer.on('planner-log', handler);
+    return () => { ipcRenderer.removeListener('planner-log', handler); };
+  }, []);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
+
+  return (
+    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 font-mono text-sm">
+      <div className="p-3 border-b border-zinc-800 bg-zinc-900 flex justify-between items-center">
+        <span className="font-bold flex items-center gap-2">
+          <TerminalIcon className="w-4 h-4 text-purple-400" />
+          Planner Output (Headless)
+        </span>
+        <span className="text-xs text-zinc-500">Live Stream</span>
+      </div>
+      <div className="flex-1 overflow-auto p-4 space-y-1">
+        {logs.length === 0 && <div className="text-zinc-600 italic">Waiting for planner output...</div>}
+        {logs.map((log, i) => (
+          <div key={i} className="whitespace-pre-wrap break-all">
+            {highlightAgentCommands(log)}
+          </div>
+        ))}
+        <div ref={endRef} />
+      </div>
+    </div>
+  );
+};
+
+const ExecutorWindow = () => {
+  const [logs, setLogs] = useState<string[]>([]);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!ipcRenderer) return;
+    const handler = (_: any, msg: string) => {
+      setLogs(prev => [...prev, msg]);
+    };
+    ipcRenderer.on('executor-log', handler);
+    return () => { ipcRenderer.removeListener('executor-log', handler); };
+  }, []);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
+
+  return (
+    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 font-mono text-sm">
+      <div className="p-3 border-b border-zinc-800 bg-zinc-900 flex justify-between items-center">
+        <span className="font-bold flex items-center gap-2">
+          <Play className="w-4 h-4 text-green-400" />
+          Executor Output
+        </span>
+        <span className="text-xs text-zinc-500">Live Stream</span>
+      </div>
+      <div className="flex-1 overflow-auto p-4 space-y-1">
+        {logs.length === 0 && <div className="text-zinc-600 italic">Waiting for executor output...</div>}
+        {logs.map((log, i) => {
+          let className = 'text-zinc-400';
+          if (log.startsWith('▶')) className = 'text-blue-400 font-bold mt-3';
+          else if (log.startsWith('✓')) className = 'text-green-400';
+          else if (log.startsWith('✗')) className = 'text-red-400';
+          else if (log.startsWith('[Plan]')) className = 'text-purple-400 font-bold';
+
+          return (
+            <div key={i} className={`whitespace-pre-wrap break-all ${className}`}>
+              {highlightAgentCommands(log)}
+            </div>
+          );
+        })}
+        <div ref={endRef} />
+      </div>
+    </div>
+  );
+};
+
+function MainApp() {
   const [cwd, setCwd] = useState<string>('')
   const [logs, setLogs] = useState<string[]>([
     "Welcome to AI Al-Gaib Orchestrator.",
@@ -78,41 +204,20 @@ function App() {
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
   const [currentPlan, setCurrentPlan] = useState<Plan | null>(null);
-  const [activeSubtaskId, setActiveSubtaskId] = useState<string | null>(null);
-  
   const terminalEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!ipcRenderer) return;
 
-    const logHandler = (_: any, msg: string) => {
-      setLogs(prev => [...prev, msg]);
-    };
-
+    const logHandler = (_: any, msg: string) => setLogs(prev => [...prev, msg]);
     const statusHandler = (_: any, { phase, status }: { phase: 'planning'|'execution', status: any }) => {
       setStatus(prev => ({ ...prev, [phase]: status }));
     };
-
-    const treeHandler = (_: any, tree: FileNode) => {
-        setFileTree(tree);
-    };
-
-    const contentHandler = (_: any, { content }: { content: string }) => {
-        setPreviewContent(content);
-    };
-
-    const planHandler = (_: any, plan: Plan) => {
-        setCurrentPlan(plan);
-        // Reset subtask statuses locally if needed, or rely on updates
-    };
-
-    const refreshHandler = () => {
-        ipcRenderer.send('request-file-tree');
-    };
-
-    const workspaceHandler = (_: any, pathStr: string) => {
-        setCwd(pathStr);
-    };
+    const treeHandler = (_: any, tree: FileNode) => setFileTree(tree);
+    const contentHandler = (_: any, { content }: { content: string }) => setPreviewContent(content);
+    const planHandler = (_: any, plan: Plan) => setCurrentPlan(plan);
+    const refreshHandler = () => ipcRenderer.send('request-file-tree');
+    const workspaceHandler = (_: any, pathStr: string) => setCwd(pathStr);
 
     ipcRenderer.on('log', logHandler);
     ipcRenderer.on('status-update', statusHandler);
@@ -144,34 +249,47 @@ function App() {
 
   const handleExecute = (e?: React.FormEvent) => {
     e?.preventDefault()
-    if (!input.trim() || !ipcRenderer) return
+    if (!ipcRenderer) return
+
+    if (isExecuting) {
+        ipcRenderer.send('cancel-task');
+        return;
+    }
+
+    if (!input.trim()) return
 
     const cmd = input.trim()
     setLogs(prev => [...prev, `$ ${cmd}`]);
     setInput('');
     setIsExecuting(true);
     setStatus({ planning: 'idle', execution: 'idle' });
-    setCurrentPlan(null); // Clear previous plan
+    setCurrentPlan(null);
     ipcRenderer.send('execute-task', { task: cmd, options: {} });
   }
-
-  const handleBrowseFolder = async () => {
-    if (!ipcRenderer) return;
-    try {
-      const selected = await ipcRenderer.invoke('select-directory');
-      if (selected) {
-        await ipcRenderer.invoke('set-workspace-root', selected);
-      }
-    } catch (err) {
-      console.error('Failed to select directory', err);
-    }
-  };
 
   const handleFileSelect = (path: string) => {
       ipcRenderer?.send('read-file', path);
   };
 
-  // Helper for Status Icon
+  const handleBrowseFolder = async () => {
+    if (!ipcRenderer) return;
+    const selectedPath = await ipcRenderer.invoke('select-directory');
+    if (selectedPath) {
+      await ipcRenderer.invoke('set-workspace-root', selectedPath);
+    }
+  };
+
+  useEffect(() => {
+      if (!ipcRenderer) return;
+      const statusHandler = (_: any, { status }: { status: any }) => {
+          if (status === 'completed' || status === 'failed') {
+              setIsExecuting(false);
+          }
+      };
+      ipcRenderer.on('status-update', statusHandler);
+      return () => { ipcRenderer.removeListener('status-update', statusHandler); };
+  }, []);
+
   const StatusIcon = ({ state }: { state: string }) => {
     if (state === 'running') return <Loader2 className="w-4 h-4 animate-spin text-blue-400" />;
     if (state === 'completed') return <CheckCircle2 className="w-4 h-4 text-green-500" />;
@@ -240,8 +358,6 @@ function App() {
 
         {/* Center: Terminal & Plan */}
         <div className="flex-1 flex flex-col min-w-0 bg-zinc-950 text-zinc-100">
-          
-          {/* Active Plan Display */}
           {currentPlan && (
             <div className="bg-zinc-900 border-b border-zinc-800 p-4 shrink-0 max-h-48 overflow-auto">
               <div className="flex items-center gap-2 mb-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider">
@@ -265,13 +381,17 @@ function App() {
             </div>
           )}
 
-          {/* Logs */}
           <div className="flex-1 p-4 font-mono text-sm overflow-auto space-y-1">
-            {logs.map((log, i) => (
-              <div key={i} className={`${log.startsWith('$') ? 'text-zinc-100 font-bold mt-4' : 'text-zinc-400'}`}>
-                {log}
-              </div>
-            ))}
+            {logs.map((log, i) => {
+              const isCommand = log.startsWith('$');
+              let className = isCommand ? 'text-zinc-100 font-bold mt-4' : 'text-zinc-400';
+              
+              return (
+                <div key={i} className={className}>
+                  {highlightAgentCommands(log)}
+                </div>
+              );
+            })}
             <div ref={terminalEndRef} />
           </div>
 
@@ -288,11 +408,24 @@ function App() {
               />
               <button 
                 type="submit" 
-                disabled={!input || isExecuting || !ipcRenderer}
-                className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium disabled:opacity-50 hover:bg-primary/90 flex items-center gap-2 transition-colors"
+                disabled={(!input && !isExecuting) || !ipcRenderer}
+                className={`px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-colors ${
+                    isExecuting 
+                    ? 'bg-red-500 hover:bg-red-600 text-white' 
+                    : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                }`}
               >
-                {isExecuting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                Run
+                {isExecuting ? (
+                    <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Stop
+                    </>
+                ) : (
+                    <>
+                        <Play className="w-3.5 h-3.5" />
+                        Run
+                    </>
+                )}
               </button>
             </form>
           </div>
@@ -318,6 +451,20 @@ function App() {
       </div>
     </div>
   )
+}
+
+function App() {
+  // Simple Router based on Query Params
+  const searchParams = new URLSearchParams(window.location.search);
+  const mode = searchParams.get('mode');
+
+  if (mode === 'planner') {
+    return <PlannerWindow />;
+  }
+  if (mode === 'executor') {
+    return <ExecutorWindow />;
+  }
+  return <MainApp />;
 }
 
 export default App

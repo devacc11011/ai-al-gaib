@@ -1,237 +1,152 @@
 import { Task, TaskType, TaskPriority } from '../types/task.js';
-import { Plan } from '../types/plan.js';
 import { Planner } from '../planner/Planner.js';
 import { ClaudeCodeAdapter } from '../agents/claude/ClaudeCodeAdapter.js';
 import { AgentType } from '../types/agent.js';
 import chalk from 'chalk';
 import path from 'path';
-import fs from 'fs-extra';
 
 export interface ExecutionCallbacks {
   onLog?: (message: string) => void;
-  onPlanCreated?: (plan: any) => void; // New callback
+  onPlanCreated?: (plan: any) => void; 
+  onPlannerOutput?: (chunk: string) => void; // New callback
   onSubtaskStart?: (subtaskId: string, title: string) => void;
   onSubtaskComplete?: (subtaskId: string, result: any) => void;
   onSubtaskFail?: (subtaskId: string, error: string) => void;
 }
-
 export class Orchestrator {
   private planner: Planner;
   private agents: Map<AgentType, any>;
-  private planStorageDir: string;
+  private abortController: AbortController | null = null;
 
   constructor() {
     this.planner = new Planner();
     this.agents = new Map();
-    this.planStorageDir = path.resolve(process.cwd(), '.ai-al-gaib', 'plans');
     
     // Register Agents
     this.agents.set(AgentType.CLAUDE, new ClaudeCodeAdapter());
-    this.agents.set(AgentType.GEMINI, new ClaudeCodeAdapter()); 
-  }
-  
-  async planTask(
-    description: string,
-    options: { planner?: string } = {},
-    callbacks?: ExecutionCallbacks
-  ): Promise<Plan> {
-    const task = this.createTask(description);
-    const log = (msg: string) => {
-      console.log(msg);
-      callbacks?.onLog?.(msg);
-    };
-
-    log(chalk.cyan(`[Orchestrator] Planning task: "${description}"...`));
-    const plan = await this.planner.createPlan(task, options.planner);
-    const planPath = await this.persistPlan(plan, task);
-
-    log(chalk.green(`[Orchestrator] Plan ${plan.id} created with ${plan.subtasks.length} subtasks.`));
-    log(chalk.green(`[Orchestrator] Saved plan to ${planPath}`));
-    callbacks?.onPlanCreated?.(plan);
-    return plan;
+    this.agents.set(AgentType.CODEX, new ClaudeCodeAdapter());
+    this.agents.set(AgentType.GEMINI, new ClaudeCodeAdapter());
   }
 
-  async executePlan(
-    planIdentifier: string,
-    callbacks?: ExecutionCallbacks
-  ): Promise<void> {
-    const planPath = this.resolvePlanPath(planIdentifier);
-    const { plan, task } = await this.loadPlanFromFile(planPath);
-    
-    const log = (msg: string) => {
-      console.log(msg);
-      callbacks?.onLog?.(msg);
-    };
-    log(chalk.cyan(`[Orchestrator] Loaded plan ${plan.id} from ${planPath}`));
-    
-    await this.executePlanSubtasks(plan, task, callbacks, planPath);
-  }
-  
-  async runFullFlow(
-    description: string, 
-    options: { planner?: string },
-    callbacks?: ExecutionCallbacks
-  ): Promise<void> {
-    const log = (msg: string) => {
-        console.log(msg);
-        callbacks?.onLog?.(msg);
-    };
-
-    const task = this.createTask(description);
-
-    log(`[Orchestrator] Planning task: "${description}"...`);
-    const plan = await this.planner.createPlan(task, options.planner);
-    const planPath = await this.persistPlan(plan, task);
-    
-    log(`[Orchestrator] Plan created with ${plan.subtasks.length} subtasks.`);
-    callbacks?.onPlanCreated?.(plan); // Send plan to UI
-    
-    await this.executePlanSubtasks(plan, task, callbacks, planPath);
-  }
-
-  private createTask(description: string): Task {
-    return {
+  async planTask(description: string, options: { planner?: string }): Promise<any> {
+    const task: Task = {
       id: `task-${Date.now()}`,
       type: TaskType.CODE_GENERATION,
       description,
       priority: TaskPriority.MEDIUM,
       createdAt: new Date()
     };
+
+    const plan = await this.planner.createPlan(task, options.planner);
+    return plan;
   }
 
-  private resolvePlanPath(identifier: string): string {
-    const absoluteInput = path.isAbsolute(identifier)
-      ? identifier
-      : path.resolve(process.cwd(), identifier);
-
-    if (fs.existsSync(absoluteInput)) {
-      return absoluteInput;
+  async executePlan(planId: string): Promise<void> {
+     // Placeholder
+  }
+  
+  cancel(): void {
+    if (this.abortController) {
+        console.log('[Orchestrator] Cancelling execution...');
+        this.abortController.abort();
+        this.abortController = null;
     }
-
-    const normalizedName = identifier.endsWith('.json') ? identifier : `${identifier}.json`;
-    const defaultPath = path.join(this.planStorageDir, normalizedName);
-    if (fs.existsSync(defaultPath)) {
-      return defaultPath;
-    }
-
-    throw new Error(`Plan file not found for identifier: ${identifier}`);
   }
 
-  private async loadPlanFromFile(planPath: string): Promise<{ plan: Plan; task: Task }> {
-    const payload = await fs.readJson(planPath);
-    if (!payload?.plan || !payload?.task) {
-      throw new Error(`Plan file "${planPath}" is missing required data.`);
-    }
+  async runFullFlow(
+    description: string, 
+    options: { planner?: string },
+    callbacks?: ExecutionCallbacks
+  ): Promise<void> {
+    this.abortController = new AbortController();
+    const signal = this.abortController.signal;
 
-    const plan: Plan = {
-      ...payload.plan,
-      createdAt: new Date(payload.plan.createdAt),
-      subtasks: payload.plan.subtasks
+    const log = (msg: string) => {
+        console.log(msg);
+        callbacks?.onLog?.(msg);
     };
 
     const task: Task = {
-      ...payload.task,
-      createdAt: new Date(payload.task.createdAt)
+        id: `task-${Date.now()}`,
+        type: TaskType.CODE_GENERATION,
+        description,
+        priority: TaskPriority.MEDIUM,
+        createdAt: new Date()
     };
 
-    return { plan, task };
-  }
+    try {
+        if (signal.aborted) throw new Error('Cancelled');
 
-  private async persistPlan(plan: Plan, task: Task, existingPath?: string): Promise<string> {
-    const targetPath = existingPath ?? path.join(this.planStorageDir, `${plan.id}.json`);
-    await fs.ensureDir(path.dirname(targetPath));
-
-    const payload = {
-      version: 1,
-      plan: {
-        ...plan,
-        createdAt: plan.createdAt.toISOString(),
-        subtasks: plan.subtasks
-      },
-      task: {
-        ...task,
-        createdAt: task.createdAt.toISOString()
-      }
-    };
-
-    await fs.writeJson(targetPath, payload, { spaces: 2 });
-    return targetPath;
-  }
-
-  private async executePlanSubtasks(
-    plan: Plan,
-    task: Task,
-    callbacks?: ExecutionCallbacks,
-    planPath?: string
-  ): Promise<void> {
-    const log = (msg: string) => {
-      console.log(msg);
-      callbacks?.onLog?.(msg);
-    };
-
-    log(`[Orchestrator] Starting Execution for plan ${plan.id}...`);
-    let executionFailed = false;
-    
-    for (const subtask of plan.subtasks) {
-        const agent = this.agents.get(subtask.agent);
-        if (!agent) {
-            const err = `Agent ${subtask.agent} not found!`;
-            log(`[Error] ${err}`);
-            callbacks?.onSubtaskFail?.(subtask.id, err);
-            executionFailed = true;
-            break;
-        }
-
-        subtask.status = 'running';
-        if (planPath) {
-          await this.persistPlan(plan, task, planPath);
-        }
-
-        log(`> Running Subtask: ${subtask.title} (${subtask.agent})`);
-        callbacks?.onSubtaskStart?.(subtask.id, subtask.title);
+            // 1. Plan
+            log(`[Orchestrator] Planning task: "${description}"...`);
+            const plan = await this.planner.createPlan(task, options.planner, (chunk) => {
+                callbacks?.onPlannerOutput?.(chunk);
+            });
+            
+            if (signal.aborted) throw new Error('Cancelled');        
+        log(`[Orchestrator] Plan created with ${plan.subtasks.length} subtasks.`);
+        callbacks?.onPlanCreated?.(plan); 
         
-        // Temporarily override console.log to capture agent logs
-        const originalLog = console.log;
-        console.log = (msg: string) => {
-            originalLog(msg);
-            callbacks?.onLog?.(msg);
-        };
+        // 2. Execute
+        log(`[Orchestrator] Starting Execution...`);
+        
+        for (const subtask of plan.subtasks) {
+            if (signal.aborted) throw new Error('Cancelled');
 
-        const result = await agent.execute({
-            subtaskId: subtask.id,
-            taskDescription: subtask.description,
-            contextFiles: subtask.inputContextFiles,
-            outputFile: path.resolve(process.cwd(), subtask.outputFile)
-        });
-
-        // Restore console.log
-        console.log = originalLog;
-
-        if (result.status === 'success') {
-            subtask.status = 'completed';
-            log(`  ✓ Completed in ${result.executionTimeMs}ms`);
-            callbacks?.onSubtaskComplete?.(subtask.id, result);
-        } else {
-            subtask.status = 'failed';
-            const err = result.error || 'Unknown error';
-            log(`  ✗ Failed: ${err}`);
-            callbacks?.onSubtaskFail?.(subtask.id, err);
-            if (planPath) {
-              await this.persistPlan(plan, task, planPath);
+            const agent = this.agents.get(subtask.agent);
+            if (!agent) {
+                const err = `Agent ${subtask.agent} not found!`;
+                log(`[Error] ${err}`);
+                callbacks?.onSubtaskFail?.(subtask.id, err);
+                continue;
             }
-            executionFailed = true;
-            break; 
-        }
 
-        if (planPath) {
-          await this.persistPlan(plan, task, planPath);
+            log(`> Running Subtask: ${subtask.title} (${subtask.agent})`);
+            callbacks?.onSubtaskStart?.(subtask.id, subtask.title);
+            
+            // Override console.log
+            const originalLog = console.log;
+            console.log = (msg: string) => {
+                originalLog(msg);
+                callbacks?.onLog?.(msg);
+            };
+
+            try {
+                const result = await agent.execute({
+                    subtaskId: subtask.id,
+                    taskDescription: subtask.description,
+                    contextFiles: subtask.inputContextFiles,
+                    outputFile: path.resolve(process.cwd(), subtask.outputFile),
+                    onOutput: (chunk: string) => {
+                        callbacks?.onLog?.(chunk.trimEnd());
+                    },
+                    abortSignal: signal
+                });
+
+                if (result.status === 'success') {
+                    log(`  ✓ Completed in ${result.executionTimeMs}ms`);
+                    callbacks?.onSubtaskComplete?.(subtask.id, result);
+                } else {
+                    const err = result.error || 'Unknown error';
+                    log(`  ✗ Failed: ${err}`);
+                    callbacks?.onSubtaskFail?.(subtask.id, err);
+                    break; 
+                }
+            } finally {
+                console.log = originalLog;
+            }
         }
-    }
-    
-    if (executionFailed) {
-      log('[Orchestrator] Execution finished with errors.');
-    } else {
-      log('All tasks completed!');
+        
+        log('All tasks completed!');
+
+    } catch (error: any) {
+        if (error.message === 'Cancelled' || error.name === 'AbortError') {
+            log('🛑 Execution cancelled.');
+        } else {
+            throw error;
+        }
+    } finally {
+        this.abortController = null;
     }
   }
 }
