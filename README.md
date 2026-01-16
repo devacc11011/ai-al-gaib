@@ -8,6 +8,17 @@
 
 AI Al-Gaib는 여러 AI 에이전트(Claude, Gemini, Codex)를 통합하여 복잡한 작업을 계획하고 실행하는 오케스트레이션 시스템입니다. Planner가 작업을 분석하고 Executor가 실행하는 구조로, 각 에이전트의 강점을 활용할 수 있습니다.
 
+## Architecture
+
+AI Al-Gaib는 Planner/Executor 조합을 중심으로 한 단순한 파이프라인 위에 CLI, Electron UI, Skill 시스템을 얹은 구조입니다.
+
+- **Planner**: 사용자 입력을 받아 Subtask로 쪼개고 필요한 스킬을 선정
+- **Executor**: Planner가 만든 Subtask를 순차적으로 실행하고 결과를 기록
+- **Skill Layer**: 각 에이전트별 스킬을 로딩·주입하여 일관된 실행 경험 제공
+- **Interface Layer**: CLI와 Electron 앱이 동일한 orchestrator를 공유하여 어디서든 동일한 계획/실행 파이프라인 사용
+
+이 계층화 덕분에 에이전트/스킬/인터페이스를 교체하거나 확장해도 핵심 오케스트레이션 로직은 그대로 유지됩니다.
+
 ## Features
 
 ### Multi-Agent Orchestration
@@ -27,6 +38,11 @@ AI Al-Gaib는 여러 AI 에이전트(Claude, Gemini, Codex)를 통합하여 복�
 - **Skill Generator**: UI에서 새로운 스킬을 AI로 생성
 - **Skill 선택**: 작업 실행 시 사용할 스킬 선택 가능
 - **프롬프트 주입**: 선택된 스킬이 Planner에 자동 주입
+
+### Agent Strengths
+- **Claude**: 상대적으로 작은 컨텍스트 윈도우를 가지지만 복잡한 추론과 멀티스텝 계획에 강함
+- **Codex**: 큰 토큰 한도를 제공하고 코드 작성/수정에서 준수한 성능을 보여 대량의 코드 생성을 빠르게 수행
+- **Gemini**: 매우 큰 컨텍스트 윈도우를 지원하여 대규모 리팩터링이나 긴 규격 문서를 다루는 작업에 유리
 
 ### Desktop Application (Electron)
 - **Explorer**: 워크스페이스 파일 탐색

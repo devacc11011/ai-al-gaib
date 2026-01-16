@@ -114,7 +114,7 @@ const SKILL_DIRS: Record<string, string> = {
 export interface SkillGenerationRequest {
   name: string;
   description: string;
-  targetAgent: 'claude' | 'gemini' | 'codex';
+  targetAgent: 'claude' | 'gemini' | 'codex' | 'all';
   generatorAgent: 'claude' | 'gemini' | 'codex';
   workspaceRoot: string;
 }
@@ -122,6 +122,7 @@ export interface SkillGenerationRequest {
 export interface SkillGenerationResult {
   success: boolean;
   path?: string;
+  paths?: string[]; // For 'all' target
   error?: string;
 }
 
@@ -136,6 +137,11 @@ export class SkillGenerator {
     };
 
     const { name, description, targetAgent, generatorAgent, workspaceRoot } = request;
+
+    // Handle 'all' target - generate for all agents
+    if (targetAgent === 'all') {
+      return this.generateForAllAgents(request, onLog);
+    }
 
     log(`Generating skill "${name}" for ${targetAgent} using ${generatorAgent}...`);
 
@@ -201,6 +207,41 @@ Generate the complete SKILL.md content now:
       log(`Error: ${error.message}`);
       return { success: false, error: error.message };
     }
+  }
+
+  private async generateForAllAgents(
+    request: SkillGenerationRequest,
+    onLog?: (msg: string) => void
+  ): Promise<SkillGenerationResult> {
+    const log = (msg: string) => {
+      logger.info(`[SkillGenerator] ${msg}`);
+      onLog?.(msg);
+    };
+
+    const agents: Array<'claude' | 'gemini' | 'codex'> = ['claude', 'gemini', 'codex'];
+    log('Target "all" selected - generating skills for all agents.');
+
+    const paths: string[] = [];
+
+    for (const agent of agents) {
+      log(`Starting generation for agent: ${agent}`);
+
+      const result = await this.generate(
+        { ...request, targetAgent: agent },
+        onLog
+      );
+
+      if (!result.success || !result.path) {
+        const error = result.error || `Skill generation failed for agent: ${agent}`;
+        log(error);
+        return { success: false, error };
+      }
+
+      paths.push(result.path);
+      log(`Completed generation for agent: ${agent}`);
+    }
+
+    return { success: true, paths };
   }
 
   private cleanSkillContent(content: string): string {

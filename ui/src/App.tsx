@@ -395,10 +395,13 @@ interface SkillGeneratorModalProps {
   onSkillCreated: () => void;
 }
 
+type TargetAgentType = AgentType | 'all';
+const TARGET_AGENTS: TargetAgentType[] = ['all', 'claude', 'codex', 'gemini'];
+
 const SkillGeneratorModal = ({ isOpen, onClose, workspaceRoot, onSkillCreated }: SkillGeneratorModalProps) => {
   const [skillName, setSkillName] = useState('');
   const [skillDescription, setSkillDescription] = useState('');
-  const [targetAgent, setTargetAgent] = useState<AgentType>('claude');
+  const [targetAgent, setTargetAgent] = useState<TargetAgentType>('all');
   const [generatorAgent, setGeneratorAgent] = useState<AgentType>('claude');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationLog, setGenerationLog] = useState<string[]>([]);
@@ -528,16 +531,18 @@ const SkillGeneratorModal = ({ isOpen, onClose, workspaceRoot, onSkillCreated }:
               <label className="block text-sm font-medium mb-1">Target Agent</label>
               <select
                 value={targetAgent}
-                onChange={(e) => setTargetAgent(e.target.value as AgentType)}
+                onChange={(e) => setTargetAgent(e.target.value as TargetAgentType)}
                 disabled={isGenerating}
                 className="w-full px-3 py-2 bg-muted border border-border rounded-md text-sm disabled:opacity-50"
               >
-                {AVAILABLE_AGENTS.map(agent => (
-                  <option key={agent} value={agent}>{agent}</option>
+                {TARGET_AGENTS.map(agent => (
+                  <option key={agent} value={agent}>
+                    {agent === 'all' ? 'All Agents' : agent}
+                  </option>
                 ))}
               </select>
               <p className="text-xs text-muted-foreground mt-1">
-                Which agent will use this skill
+                {targetAgent === 'all' ? 'Creates skill for all agents' : 'Which agent will use this skill'}
               </p>
             </div>
             <div>
