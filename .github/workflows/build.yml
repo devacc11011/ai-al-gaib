@@ -51,7 +51,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform }}
-          path: release/*
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.pkg
+            release/*.exe
+            release/*.nsis
+            release/*.AppImage
+            release/*.deb
+            release/*.rpm
+            release/*.tar.gz
+            release/*.yml
+            release/*.json
           retention-days: 5
 
   release:
