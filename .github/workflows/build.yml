@@ -68,7 +68,18 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.zip
+            artifacts/**/*.pkg
+            artifacts/**/*.exe
+            artifacts/**/*.nsis
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.tar.gz
+            artifacts/**/*.yml
+            artifacts/**/*.json
           draft: false
           prerelease: false
         env:
