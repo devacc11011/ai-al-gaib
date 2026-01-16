@@ -5,6 +5,7 @@ import { AgentType } from '../types/agent.js';
 import { Skill, generateSkillPrompt } from '../skills/SkillLoader.js';
 import chalk from 'chalk';
 import path from 'path';
+import { logAgentResult } from '../utils/agentResultLogger.js';
 
 export interface PermissionRequest {
   id: string;
@@ -172,6 +173,19 @@ export class Orchestrator {
                     abortSignal: signal
                 });
 
+                try {
+                    await logAgentResult({
+                        agent: subtask.agent,
+                        subtaskId: subtask.id,
+                        subtaskTitle: subtask.title,
+                        status: result.status === 'success' ? 'success' : 'failure',
+                        outputFile: result.outputFile,
+                        error: result.error
+                    });
+                } catch (logErr: any) {
+                    log(`[LogError] Failed to record agent result: ${logErr.message}`);
+                }
+
                 if (result.status === 'success') {
                     log(`  ✓ Completed in ${result.executionTimeMs}ms`);
                     callbacks?.onSubtaskComplete?.(subtask.id, result);
@@ -181,6 +195,19 @@ export class Orchestrator {
                     callbacks?.onSubtaskFail?.(subtask.id, err);
                     break; 
                 }
+            } catch (execError: any) {
+                try {
+                    await logAgentResult({
+                        agent: subtask.agent,
+                        subtaskId: subtask.id,
+                        subtaskTitle: subtask.title,
+                        status: 'failure',
+                        error: execError.message
+                    });
+                } catch (logErr: any) {
+                    log(`[LogError] Failed to record agent result: ${logErr.message}`);
+                }
+                throw execError;
             } finally {
                 console.log = originalLog;
             }

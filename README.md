@@ -1,6 +1,6 @@
 # AI Al-Gaib
 
-<span style="color: red; font-weight: bold;">⚠️ 이 프로젝트는 코드 한 줄도 직접 검증하지 않은 바이브 코딩 결과물입니다. 실제 사용 시 반드시 <code>logs/cli.log</code>를 확인하여 어떤 명령이 실행되었는지 검증하십시오.</span>
+<span style="color: red; font-weight: bold;">⚠️ 이 프로젝트는 코드 한 줄도 직접 검증하지 않은 바이브 코딩 결과물입니다. 실제 사용 시 반드시 <code>logs/cli.log</code>와 <code>logs/agent-results.log</code>를 확인하여 어떤 명령과 에이전트 출력이 실행·저장되었는지 검증하십시오.</span>
 
 ![img.png](img.png)
 
